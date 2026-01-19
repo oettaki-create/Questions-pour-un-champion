@@ -1,4 +1,637 @@
 // ============================================
+// SUPABASE CONFIGURATION
+// ============================================
+
+const SUPABASE_URL = 'https://aczqcdgjvwjtalvrzhcz.supabase.co';
+// NOTE: Replace this with your actual anon key from Supabase Dashboard > Settings > API > anon public
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY_HERE';
+
+// Current logged in player
+let currentPlayer = null;
+
+// Supabase API helper
+async function supabaseRequest(endpoint, method = 'GET', body = null) {
+    // Check if Supabase is configured
+    if (SUPABASE_ANON_KEY === 'YOUR_SUPABASE_ANON_KEY_HERE') {
+        throw new Error('Supabase not configured. Please set your anon key.');
+    }
+    
+    const options = {
+        method,
+        headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': method === 'POST' ? 'return=representation' : undefined
+        }
+    };
+    if (body) options.body = JSON.stringify(body);
+    
+    try {
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/${endpoint}`, options);
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ message: 'Network error' }));
+            throw new Error(error.message || 'Request failed');
+        }
+        const text = await response.text();
+        return text ? JSON.parse(text) : null;
+    } catch (error) {
+        console.error('Supabase error:', error);
+        throw error;
+    }
+}
+
+// ============================================
+// PLAYER AUTHENTICATION & PROFILE
+// ============================================
+
+// Check if username exists
+async function checkUsernameExists(username) {
+    try {
+        const data = await supabaseRequest(`players?username=eq.${encodeURIComponent(username)}&select=id`);
+        return data && data.length > 0;
+    } catch (error) {
+        console.error('Error checking username:', error);
+        return false;
+    }
+}
+
+// Register new player
+async function registerPlayer(username, password) {
+    try {
+        // Check if username already exists
+        const exists = await checkUsernameExists(username);
+        if (exists) {
+            throw new Error('Username already taken');
+        }
+        
+        // Simple hash for password (in production, use proper hashing on server)
+        const passwordHash = await simpleHash(password);
+        
+        const playerData = {
+            username: username,
+            password_hash: passwordHash,
+            avatar_config: currentAvatar || generateRandomAvatar(),
+            games_played: 0,
+            games_won: 0,
+            total_score: 0,
+            highest_score: 0
+        };
+        
+        const data = await supabaseRequest('players', 'POST', playerData);
+        
+        if (data && data.length > 0) {
+            currentPlayer = data[0];
+            savePlayerSession(currentPlayer);
+            return { success: true, player: currentPlayer };
+        }
+        throw new Error('Registration failed');
+    } catch (error) {
+        console.error('Registration error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// Login player
+async function loginPlayer(username, password) {
+    try {
+        const passwordHash = await simpleHash(password);
+        const data = await supabaseRequest(
+            `players?username=eq.${encodeURIComponent(username)}&password_hash=eq.${encodeURIComponent(passwordHash)}&select=*`
+        );
+        
+        if (data && data.length > 0) {
+            currentPlayer = data[0];
+            
+            // Update last_seen
+            await supabaseRequest(
+                `players?id=eq.${currentPlayer.id}`,
+                'PATCH',
+                { last_seen: new Date().toISOString() }
+            );
+            
+            // Load avatar from profile
+            if (currentPlayer.avatar_config) {
+                currentAvatar = currentPlayer.avatar_config;
+                saveAvatarToStorage();
+            }
+            
+            savePlayerSession(currentPlayer);
+            return { success: true, player: currentPlayer };
+        }
+        throw new Error('Invalid username or password');
+    } catch (error) {
+        console.error('Login error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// Logout player
+function logoutPlayer() {
+    currentPlayer = null;
+    localStorage.removeItem('playerSession');
+    updateAuthUI();
+}
+
+// Save player session to localStorage
+function savePlayerSession(player) {
+    localStorage.setItem('playerSession', JSON.stringify({
+        id: player.id,
+        username: player.username,
+        avatar_config: player.avatar_config
+    }));
+}
+
+// Load player session from localStorage
+async function loadPlayerSession() {
+    const saved = localStorage.getItem('playerSession');
+    if (saved) {
+        try {
+            const session = JSON.parse(saved);
+            // Verify session is still valid by fetching fresh data
+            const data = await supabaseRequest(`players?id=eq.${session.id}&select=*`);
+            if (data && data.length > 0) {
+                currentPlayer = data[0];
+                if (currentPlayer.avatar_config) {
+                    currentAvatar = currentPlayer.avatar_config;
+                }
+                return true;
+            }
+        } catch (e) {
+            console.error('Session load error:', e);
+        }
+    }
+    return false;
+}
+
+// Update player profile (avatar, etc.)
+async function updatePlayerProfile(updates) {
+    if (!currentPlayer) return { success: false, error: 'Not logged in' };
+    
+    try {
+        await supabaseRequest(
+            `players?id=eq.${currentPlayer.id}`,
+            'PATCH',
+            updates
+        );
+        
+        // Update local player object
+        Object.assign(currentPlayer, updates);
+        savePlayerSession(currentPlayer);
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Profile update error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// Save avatar to Supabase
+async function saveAvatarToSupabase() {
+    if (!currentPlayer) return;
+    
+    await updatePlayerProfile({ avatar_config: currentAvatar });
+}
+
+// Update player stats after game
+async function updatePlayerStats(score, won, playersCount) {
+    if (!currentPlayer) return;
+    
+    try {
+        const updates = {
+            games_played: currentPlayer.games_played + 1,
+            total_score: currentPlayer.total_score + score,
+            last_seen: new Date().toISOString()
+        };
+        
+        if (won) {
+            updates.games_won = currentPlayer.games_won + 1;
+        }
+        
+        if (score > currentPlayer.highest_score) {
+            updates.highest_score = score;
+        }
+        
+        await updatePlayerProfile(updates);
+        
+        // Also save to game history
+        await supabaseRequest('game_history', 'POST', {
+            player_id: currentPlayer.id,
+            room_code: currentRoomCode || 'solo',
+            score: score,
+            position: won ? 1 : null,
+            players_count: playersCount
+        });
+        
+    } catch (error) {
+        console.error('Stats update error:', error);
+    }
+}
+
+// Get global leaderboard
+async function getGlobalLeaderboard(limit = 10) {
+    try {
+        const data = await supabaseRequest(
+            `players?select=username,total_score,games_played,games_won,avatar_config&order=total_score.desc&limit=${limit}`
+        );
+        return data || [];
+    } catch (error) {
+        console.error('Leaderboard error:', error);
+        return [];
+    }
+}
+
+// Simple hash function (for demo - use bcrypt in production)
+async function simpleHash(str) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(str + 'quiz_game_salt_2024');
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Update UI based on auth state
+function updateAuthUI() {
+    const authSection = document.getElementById('authSection');
+    const profileSection = document.getElementById('profileSection');
+    const usernameDisplay = document.getElementById('usernameDisplay');
+    const profileAvatar = document.getElementById('profileAvatar');
+    const playerStatsDisplay = document.getElementById('playerStatsDisplay');
+    
+    if (currentPlayer) {
+        if (authSection) authSection.style.display = 'none';
+        if (profileSection) profileSection.style.display = 'flex';
+        if (usernameDisplay) usernameDisplay.textContent = currentPlayer.username;
+        if (profileAvatar && currentPlayer.avatar_config) {
+            profileAvatar.src = generateAvatarUrl(currentPlayer.avatar_config);
+        }
+        if (playerStatsDisplay) {
+            playerStatsDisplay.innerHTML = `
+                <span>🎮 ${currentPlayer.games_played}</span>
+                <span>🏆 ${currentPlayer.games_won}</span>
+                <span>⭐ ${currentPlayer.total_score}</span>
+            `;
+        }
+        
+        // Pre-fill name fields
+        const createName = document.getElementById('createName');
+        const joinName = document.getElementById('joinName');
+        if (createName) createName.value = currentPlayer.username;
+        if (joinName) joinName.value = currentPlayer.username;
+    } else {
+        if (authSection) authSection.style.display = 'flex';
+        if (profileSection) profileSection.style.display = 'none';
+    }
+}
+
+// Show auth tab (login/register)
+function showAuthTab(tab) {
+    const loginForm = document.getElementById('loginForm');
+    const registerForm = document.getElementById('registerForm');
+    const tabs = document.querySelectorAll('.auth-tab');
+    
+    tabs.forEach(t => t.classList.remove('active'));
+    event.target.classList.add('active');
+    
+    if (tab === 'login') {
+        if (loginForm) loginForm.style.display = 'flex';
+        if (registerForm) registerForm.style.display = 'none';
+    } else {
+        if (loginForm) loginForm.style.display = 'none';
+        if (registerForm) registerForm.style.display = 'flex';
+    }
+    
+    // Clear error
+    const authError = document.getElementById('authError');
+    if (authError) authError.textContent = '';
+}
+
+// Handle login
+async function handleLogin() {
+    const username = document.getElementById('loginUsername')?.value.trim();
+    const password = document.getElementById('loginPassword')?.value;
+    const authError = document.getElementById('authError');
+    
+    if (!username || !password) {
+        if (authError) authError.textContent = 'Please fill in all fields';
+        return;
+    }
+    
+    if (authError) authError.textContent = 'Logging in...';
+    
+    const result = await loginPlayer(username, password);
+    
+    if (result.success) {
+        if (authError) authError.textContent = '';
+        updateAuthUI();
+        updateAllAvatarDisplays();
+    } else {
+        if (authError) authError.textContent = result.error || 'Login failed';
+    }
+}
+
+// Handle register
+async function handleRegister() {
+    const username = document.getElementById('registerUsername')?.value.trim();
+    const password = document.getElementById('registerPassword')?.value;
+    const passwordConfirm = document.getElementById('registerPasswordConfirm')?.value;
+    const authError = document.getElementById('authError');
+    
+    if (!username || !password || !passwordConfirm) {
+        if (authError) authError.textContent = 'Please fill in all fields';
+        return;
+    }
+    
+    if (username.length < 3) {
+        if (authError) authError.textContent = 'Username must be at least 3 characters';
+        return;
+    }
+    
+    if (password.length < 4) {
+        if (authError) authError.textContent = 'Password must be at least 4 characters';
+        return;
+    }
+    
+    if (password !== passwordConfirm) {
+        if (authError) authError.textContent = 'Passwords do not match';
+        return;
+    }
+    
+    if (authError) authError.textContent = 'Creating account...';
+    
+    const result = await registerPlayer(username, password);
+    
+    if (result.success) {
+        if (authError) authError.textContent = '';
+        updateAuthUI();
+        updateAllAvatarDisplays();
+    } else {
+        if (authError) authError.textContent = result.error || 'Registration failed';
+    }
+}
+
+// Show global leaderboard
+async function showGlobalLeaderboard() {
+    let leaderboard = [];
+    let errorMsg = null;
+    
+    try {
+        leaderboard = await getGlobalLeaderboard(10);
+    } catch (error) {
+        errorMsg = error.message;
+    }
+    
+    let html = `
+        <div class="global-leaderboard-overlay" onclick="closeGlobalLeaderboard(event)">
+            <div class="global-leaderboard-modal" onclick="event.stopPropagation()">
+                <h2>🏆 Global Leaderboard</h2>
+                <div class="global-leaderboard-list">
+    `;
+    
+    if (errorMsg) {
+        html += `<p class="no-data">⚠️ ${errorMsg}</p>`;
+    } else if (leaderboard.length === 0) {
+        html += '<p class="no-data">No players yet. Be the first!</p>';
+    } else {
+        leaderboard.forEach((player, idx) => {
+            const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`;
+            const avatarUrl = player.avatar_config ? generateAvatarUrl(player.avatar_config) : generateAvatarUrlFromName(player.username);
+            
+            html += `
+                <div class="leaderboard-row ${idx < 3 ? 'top-three' : ''}">
+                    <span class="lb-rank">${medal}</span>
+                    <img src="${avatarUrl}" alt="${player.username}" class="lb-avatar">
+                    <span class="lb-name">${player.username}</span>
+                    <span class="lb-score">${player.total_score} pts</span>
+                    <span class="lb-stats">${player.games_won}W / ${player.games_played}G</span>
+                </div>
+            `;
+        });
+    }
+    
+    html += `
+                </div>
+                <button class="btn" onclick="closeGlobalLeaderboard()">Close</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function closeGlobalLeaderboard(event) {
+    const overlay = document.querySelector('.global-leaderboard-overlay');
+    if (overlay) overlay.remove();
+}
+
+// ============================================
+// DICEBEAR AVATAR SYSTEM
+// ============================================
+
+const avatarOptions = {
+    skinColor: ['9e5622', 'f5d6c3', 'f2c7a5', 'd4a574', '8d5524', '6d4228', 'ffdbac', 'e8beac'],
+    hair: ['short01', 'short02', 'short03', 'short04', 'short05', 'short06', 'short07', 'short08', 'short09', 'short10', 'short11', 'short12', 'short13', 'short14', 'short15', 'short16', 'long01', 'long02', 'long03', 'long04', 'long05', 'long06', 'long07', 'long08', 'long09', 'long10', 'long11', 'long12', 'long13', 'long14', 'long15', 'long16', 'long17', 'long18', 'long19', 'long20', 'long21'],
+    hairColor: ['0e0e0e', '3d2314', '5a3825', '85461e', 'a55728', 'b7652c', 'cb8442', 'd9a84a', 'e8c888', 'f4d7a4', 'b55239', 'c93305', '562b00', '796a45', '9a8b6f'],
+    eyes: ['variant01', 'variant02', 'variant03', 'variant04', 'variant05', 'variant06', 'variant07', 'variant08', 'variant09', 'variant10', 'variant11', 'variant12', 'variant13', 'variant14', 'variant15', 'variant16', 'variant17', 'variant18', 'variant19', 'variant20', 'variant21', 'variant22', 'variant23', 'variant24', 'variant25', 'variant26'],
+    eyebrows: ['variant01', 'variant02', 'variant03', 'variant04', 'variant05', 'variant06', 'variant07', 'variant08', 'variant09', 'variant10', 'variant11', 'variant12', 'variant13', 'variant14', 'variant15'],
+    mouth: ['variant01', 'variant02', 'variant03', 'variant04', 'variant05', 'variant06', 'variant07', 'variant08', 'variant09', 'variant10', 'variant11', 'variant12', 'variant13', 'variant14', 'variant15', 'variant16', 'variant17', 'variant18', 'variant19', 'variant20', 'variant21', 'variant22', 'variant23', 'variant24', 'variant25', 'variant26', 'variant27', 'variant28', 'variant29', 'variant30'],
+    glasses: ['', 'variant01', 'variant02', 'variant03', 'variant04', 'variant05'],
+    earrings: ['', 'variant01', 'variant02', 'variant03', 'variant04', 'variant05', 'variant06'],
+    features: ['', 'blush', 'freckles', 'birthmark']
+};
+
+const categoryConfig = {
+    skinColor: { icon: '🎨', label: { en: 'Skin', fr: 'Peau' }, type: 'color' },
+    hair: { icon: '💇', label: { en: 'Hair', fr: 'Cheveux' }, type: 'option' },
+    hairColor: { icon: '🎨', label: { en: 'Hair Color', fr: 'Couleur' }, type: 'color' },
+    eyes: { icon: '👁️', label: { en: 'Eyes', fr: 'Yeux' }, type: 'option' },
+    eyebrows: { icon: '🤨', label: { en: 'Brows', fr: 'Sourcils' }, type: 'option' },
+    mouth: { icon: '👄', label: { en: 'Mouth', fr: 'Bouche' }, type: 'option' },
+    glasses: { icon: '👓', label: { en: 'Glasses', fr: 'Lunettes' }, type: 'option' },
+    earrings: { icon: '💎', label: { en: 'Earrings', fr: 'Boucles' }, type: 'option' },
+    features: { icon: '✨', label: { en: 'Features', fr: 'Traits' }, type: 'option' }
+};
+
+const skinColorHex = {
+    '9e5622': '#9e5622', 'f5d6c3': '#f5d6c3', 'f2c7a5': '#f2c7a5', 'd4a574': '#d4a574',
+    '8d5524': '#8d5524', '6d4228': '#6d4228', 'ffdbac': '#ffdbac', 'e8beac': '#e8beac'
+};
+
+const hairColorHex = {
+    '0e0e0e': '#0e0e0e', '3d2314': '#3d2314', '5a3825': '#5a3825', '85461e': '#85461e',
+    'a55728': '#a55728', 'b7652c': '#b7652c', 'cb8442': '#cb8442', 'd9a84a': '#d9a84a',
+    'e8c888': '#e8c888', 'f4d7a4': '#f4d7a4', 'b55239': '#b55239', 'c93305': '#c93305',
+    '562b00': '#562b00', '796a45': '#796a45', '9a8b6f': '#9a8b6f'
+};
+
+let currentAvatar = loadAvatarFromStorage() || generateRandomAvatar();
+let currentCategory = 'hair';
+
+function loadAvatarFromStorage() {
+    const saved = localStorage.getItem('playerAvatar');
+    if (saved) { try { return JSON.parse(saved); } catch (e) { return null; } }
+    return null;
+}
+
+function saveAvatarToStorage() {
+    localStorage.setItem('playerAvatar', JSON.stringify(currentAvatar));
+    // Also save to Supabase if logged in
+    if (currentPlayer) {
+        saveAvatarToSupabase();
+    }
+}
+
+function generateRandomAvatar() {
+    return {
+        skinColor: avatarOptions.skinColor[Math.floor(Math.random() * avatarOptions.skinColor.length)],
+        hair: avatarOptions.hair[Math.floor(Math.random() * avatarOptions.hair.length)],
+        hairColor: avatarOptions.hairColor[Math.floor(Math.random() * avatarOptions.hairColor.length)],
+        eyes: avatarOptions.eyes[Math.floor(Math.random() * avatarOptions.eyes.length)],
+        eyebrows: avatarOptions.eyebrows[Math.floor(Math.random() * avatarOptions.eyebrows.length)],
+        mouth: avatarOptions.mouth[Math.floor(Math.random() * avatarOptions.mouth.length)],
+        glasses: avatarOptions.glasses[Math.floor(Math.random() * 3) === 0 ? Math.floor(Math.random() * avatarOptions.glasses.length) : 0],
+        earrings: avatarOptions.earrings[Math.floor(Math.random() * 4) === 0 ? Math.floor(Math.random() * avatarOptions.earrings.length) : 0],
+        features: avatarOptions.features[Math.floor(Math.random() * 3) === 0 ? Math.floor(Math.random() * avatarOptions.features.length) : 0]
+    };
+}
+
+function generateAvatarUrl(options) {
+    const opts = options || currentAvatar;
+    const params = new URLSearchParams();
+    if (opts.skinColor) params.append('skinColor', opts.skinColor);
+    if (opts.hair) params.append('hair', opts.hair);
+    if (opts.hairColor) params.append('hairColor', opts.hairColor);
+    if (opts.eyes) params.append('eyes', opts.eyes);
+    if (opts.eyebrows) params.append('eyebrows', opts.eyebrows);
+    if (opts.mouth) params.append('mouth', opts.mouth);
+    if (opts.glasses) { params.append('glasses', opts.glasses); params.append('glassesProbability', '100'); }
+    if (opts.earrings) { params.append('earrings', opts.earrings); params.append('earringsProbability', '100'); }
+    if (opts.features) { params.append('features', opts.features); params.append('featuresProbability', '100'); }
+    return 'https://api.dicebear.com/7.x/adventurer/svg?' + params.toString();
+}
+
+function generateAvatarUrlFromName(name) {
+    const seed = name || 'Player';
+    return `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(seed)}`;
+}
+
+function updateAllAvatarDisplays() {
+    const url = generateAvatarUrl(currentAvatar);
+    const homeImg = document.getElementById('homeAvatarImg');
+    const dressingImg = document.getElementById('dressingAvatarImg');
+    if (homeImg) homeImg.src = url;
+    if (dressingImg) dressingImg.src = url;
+}
+
+function randomizeAvatar() {
+    currentAvatar = generateRandomAvatar();
+    updateAllAvatarDisplays();
+    showAvatarReaction();
+}
+
+function showAvatarReaction() {
+    const reactions = ['😍', '🤩', '✨', '🎉', '💫', '🌟', '😎', '🔥'];
+    const reaction = reactions[Math.floor(Math.random() * reactions.length)];
+    const el = document.getElementById('avatarReaction');
+    if (el) {
+        el.textContent = reaction;
+        el.classList.remove('show');
+        void el.offsetWidth;
+        el.classList.add('show');
+        setTimeout(() => el.classList.remove('show'), 1500);
+    }
+}
+
+function saveAvatar() {
+    saveAvatarToStorage();
+    showAvatarReaction();
+    closeDressingRoom();
+}
+
+function selectAvatarOption(category, value) {
+    currentAvatar[category] = value;
+    updateAllAvatarDisplays();
+    renderAvatarOptions();
+    showAvatarReaction();
+}
+
+function openDressingRoom() {
+    showScreen('dressingRoomScreen');
+    updateAllAvatarDisplays();
+    renderCategoryTabs();
+    renderAvatarOptions();
+}
+
+function closeDressingRoom() {
+    showHome();
+}
+
+function renderCategoryTabs() {
+    const container = document.getElementById('categoryTabs');
+    if (!container) return;
+    
+    container.innerHTML = Object.entries(categoryConfig).map(([key, config]) => `
+        <div class="category-pill ${currentCategory === key ? 'active' : ''}" onclick="selectCategory('${key}')">
+            <span class="pill-icon">${config.icon}</span>
+            <span class="pill-label">${config.label[selectedLanguage] || config.label.en}</span>
+        </div>
+    `).join('');
+}
+
+function selectCategory(category) {
+    currentCategory = category;
+    renderCategoryTabs();
+    renderAvatarOptions();
+}
+
+function renderAvatarOptions() {
+    const container = document.getElementById('avatarOptionsContainer');
+    if (!container) return;
+    
+    const config = categoryConfig[currentCategory];
+    const options = avatarOptions[currentCategory];
+    const isColor = config.type === 'color';
+    
+    let html = '';
+    
+    if (isColor) {
+        const colorMap = currentCategory === 'skinColor' ? skinColorHex : hairColorHex;
+        html += `<div class="color-grid-new">`;
+        options.forEach(opt => {
+            const selected = currentAvatar[currentCategory] === opt;
+            const hexColor = colorMap[opt] || '#' + opt;
+            html += `<button class="color-btn-new ${selected ? 'selected' : ''}" 
+                style="background-color: ${hexColor};" 
+                onclick="selectAvatarOption('${currentCategory}', '${opt}')"
+                title="${opt}">
+            </button>`;
+        });
+        html += `</div>`;
+    } else {
+        html += `<div class="options-grid-new avatar-preview-grid">`;
+        options.forEach((opt, idx) => {
+            const selected = currentAvatar[currentCategory] === opt;
+            
+            // Generate a preview avatar with this option
+            const previewAvatar = { ...currentAvatar };
+            previewAvatar[currentCategory] = opt;
+            const previewUrl = generateAvatarUrl(previewAvatar);
+            
+            // Special label for empty option
+            const isEmpty = opt === '';
+            
+            html += `<button class="option-btn-new avatar-option-preview ${selected ? 'selected' : ''} ${isEmpty ? 'empty-option' : ''}" 
+                onclick="selectAvatarOption('${currentCategory}', '${opt}')">
+                ${isEmpty ? '<span class="empty-icon">❌</span>' : `<img src="${previewUrl}" alt="${opt || 'None'}" loading="lazy">`}
+            </button>`;
+        });
+        html += `</div>`;
+    }
+    
+    container.innerHTML = html;
+}
+
+// ============================================
 // LANDING PAGE
 // ============================================
 
@@ -12,7 +645,7 @@ function toggleFaq(element) {
 }
 
 // Generate random stars on landing page
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     const starsContainer = document.getElementById('landingStars');
     if (starsContainer) {
         for (let i = 0; i < 50; i++) {
@@ -24,6 +657,20 @@ document.addEventListener('DOMContentLoaded', function() {
             star.style.animationDuration = (1.5 + Math.random() * 1.5) + 's';
             starsContainer.appendChild(star);
         }
+    }
+    
+    // Initialize avatar display
+    setTimeout(() => {
+        if (!currentAvatar) currentAvatar = generateRandomAvatar();
+        updateAllAvatarDisplays();
+    }, 100);
+    
+    // Try to load saved session
+    try {
+        await loadPlayerSession();
+        updateAuthUI();
+    } catch (e) {
+        console.log('No saved session');
     }
 });
 
@@ -58,6 +705,11 @@ const translations = {
         createAndJoin: "Create & Join",
         back: "Back",
         roomCode: "Room Code",
+        // Avatar translations
+        dressingRoom: "Dressing Room",
+        customize: "Customize Avatar",
+        randomize: "Randomize",
+        save: "Save",
         joinRoomBtn: "Join Room",
         waitingForPlayers: "Waiting for players to join...",
         playersInLobby: "players in lobby",
@@ -161,6 +813,11 @@ const translations = {
         createAndJoin: "Créer et rejoindre",
         back: "Retour",
         roomCode: "Code de la salle",
+        // Avatar translations
+        dressingRoom: "Vestiaire",
+        customize: "Personnaliser l'avatar",
+        randomize: "Aléatoire",
+        save: "Sauvegarder",
         joinRoomBtn: "Rejoindre la salle",
         waitingForPlayers: "En attente de joueurs...",
         playersInLobby: "joueurs dans le salon",
@@ -825,7 +1482,10 @@ function showScreen(screenId) {
     }
 }
 
-function showHome() { showScreen('homeScreen'); }
+function showHome() { 
+    showScreen('homeScreen'); 
+    updateAllAvatarDisplays();
+}
 
 function showSoloSetup() {
     showScreen('soloSetupScreen');
@@ -1315,22 +1975,23 @@ function showNextSoloQuestion() {
         questionBox.classList.add('entering');
     }
 
-    let timeLeft = soloCurrentQuestion.time || 10;
-    const maxTime = timeLeft;
+    // Store time info for scoring
+    window.soloTimeLeft = soloCurrentQuestion.time || 10;
+    window.soloMaxTime = window.soloTimeLeft;
     const timerEl = document.getElementById('soloTimer');
     
     // Use circular timer
     if (timerEl) {
-        timerEl.innerHTML = createCircularTimer(timeLeft, maxTime);
+        timerEl.innerHTML = createCircularTimer(window.soloTimeLeft, window.soloMaxTime);
     }
 
     clearInterval(timerInterval);
     timerInterval = setInterval(() => {
-        timeLeft--;
+        window.soloTimeLeft--;
         if (timerEl) {
-            timerEl.innerHTML = createCircularTimer(timeLeft, maxTime);
+            timerEl.innerHTML = createCircularTimer(window.soloTimeLeft, window.soloMaxTime);
         }
-        if (timeLeft <= 0) { 
+        if (window.soloTimeLeft <= 0) { 
             clearInterval(timerInterval); 
             handleSoloTimeout(); 
         }
@@ -1352,11 +2013,29 @@ function showNextSoloQuestion() {
     hideSoloMessage();
 }
 
+// Scoring constants
+const WRONG_ANSWER_PENALTY = 5;  // Points lost for wrong answer
+const MIN_CORRECT_POINTS = 10;   // Minimum points for correct answer
+const MAX_CORRECT_POINTS = 100;  // Maximum points for correct answer (instant answer)
+
+// Calculate score based on time left
+function calculateTimeScore(timeLeft, maxTime) {
+    // Score = MIN + (MAX - MIN) * (timeLeft / maxTime)
+    // Fast answer = more points
+    const timeRatio = Math.max(0, timeLeft / maxTime);
+    const score = Math.round(MIN_CORRECT_POINTS + (MAX_CORRECT_POINTS - MIN_CORRECT_POINTS) * timeRatio);
+    return score;
+}
+
 function handleSoloAnswer(idx) {
     clearInterval(timerInterval);
     const correct = idx === soloCurrentQuestion.correct;
+    
     if (correct) {
-        soloScore += 100;
+        // Calculate time-based score
+        const earnedPoints = calculateTimeScore(window.soloTimeLeft || 0, window.soloMaxTime || 10);
+        soloScore += earnedPoints;
+        
         playSfx('correct');
         const scoreEl = document.getElementById('soloScore');
         if (scoreEl) {
@@ -1369,13 +2048,29 @@ function handleSoloAnswer(idx) {
             void scoreEl.offsetWidth; // Trigger reflow
             scoreEl.classList.add('updated');
         }
-        // Enhanced feedback
-        showPointsPopup('+100', true);
+        // Enhanced feedback with actual points earned
+        showPointsPopup(`+${earnedPoints}`, true);
         showFeedbackFlash(true);
         createConfetti(30);
     } else { 
+        // Penalty for wrong answer
+        soloScore = Math.max(0, soloScore - WRONG_ANSWER_PENALTY);
+        
         playSfx('wrong');
-        showPointsPopup('✗', false);
+        
+        // Update score display
+        const scoreEl = document.getElementById('soloScore');
+        if (scoreEl) {
+            const scoreValue = scoreEl.querySelector('.score-value');
+            if (scoreValue) {
+                scoreValue.textContent = soloScore;
+            }
+            scoreEl.classList.remove('updated');
+            void scoreEl.offsetWidth;
+            scoreEl.classList.add('updated');
+        }
+        
+        showPointsPopup(`-${WRONG_ANSWER_PENALTY}`, false);
         showFeedbackFlash(false);
         shakeScreen(); 
     }
@@ -1392,8 +2087,21 @@ function handleSoloAnswer(idx) {
 }
 
 function handleSoloTimeout() {
+    // Penalty for timeout (same as wrong answer)
+    soloScore = Math.max(0, soloScore - WRONG_ANSWER_PENALTY);
+    
     playSfx('wrong');
-    showPointsPopup('⏰', false);
+    
+    // Update score display
+    const scoreEl = document.getElementById('soloScore');
+    if (scoreEl) {
+        const scoreValue = scoreEl.querySelector('.score-value');
+        if (scoreValue) {
+            scoreValue.textContent = soloScore;
+        }
+    }
+    
+    showPointsPopup(`-${WRONG_ANSWER_PENALTY}`, false);
     showFeedbackFlash(false);
     shakeScreen();
     document.querySelectorAll('#soloOptionsBox .option').forEach((opt, i) => {
@@ -1407,6 +2115,12 @@ function handleSoloTimeout() {
 
 function showSoloGameOver() {
     clearInterval(timerInterval);
+    
+    // Save stats to Supabase if logged in
+    if (currentPlayer) {
+        updatePlayerStats(soloScore, true, 1);
+    }
+    
     // Show podium celebration for solo mode
     showPodiumCelebration([{
         name: document.getElementById('soloName')?.value || 'Player',
@@ -1493,7 +2207,8 @@ function closePodium() {
     if (window.podiumIsSolo) {
         closePodiumAndShowGameOver();
     } else {
-        closePodiumAndShowMultiGameOver();
+        // For multiplayer, go directly to home instead of showing another game over screen
+        showScreen('homeScreen');
     }
 }
 
@@ -1807,8 +2522,19 @@ function handleMessage(msg) {
             showScreen('lobbyScreen');
             document.getElementById('roomCode').textContent = currentRoomCode;
             break;
-        case 'players': updatePlayers(msg.data); break;
-        case 'gameStarting': showMessage(msg.data.message || 'Game starting!'); setTimeout(() => showScreen('gameScreen'), 2000); break;
+        case 'players': 
+            updatePlayers(msg.data); 
+            // Store players for game screen
+            window.currentGamePlayers = msg.data.players;
+            break;
+        case 'gameStarting': 
+            showMessage(msg.data.message || 'Game starting!'); 
+            // Initialize player cards when game starts
+            if (window.currentGamePlayers) {
+                initializeGameScreen(window.currentGamePlayers, {});
+            }
+            setTimeout(() => showScreen('gameScreen'), 2000); 
+            break;
         case 'question': currentMultiQuestion = msg.data; showQuestion(msg.data); break;
         case 'buzzed': handleBuzzed(msg.data); break;
         case 'answerResult': showResult(msg.data); break;
@@ -1833,13 +2559,19 @@ function updatePlayers(data) {
         td.innerHTML = `<div class="team-score-box red"><div>${t('teamRed')}</div><div style="font-size:20px;margin-top:5px;">${data.teamCounts.red}/2</div></div><div class="team-score-box blue"><div>${t('teamBlue')}</div><div style="font-size:20px;margin-top:5px;">${data.teamCounts.blue}/2</div></div>`;
         list.appendChild(td);
     }
+    
+    // Get current player name from input fields
+    const currentPlayerName = document.getElementById('createName')?.value || 
+                              document.getElementById('joinName')?.value || '';
+    
     data.players.forEach(player => {
         const div = document.createElement('div'); div.className = 'player-item' + (player.isHost ? ' host' : '');
         let teamBadge = '';
         if (data.gameMode === 'team' && player.team) teamBadge = `<span class="team-badge team-${player.team}">${t('team' + player.team.charAt(0).toUpperCase() + player.team.slice(1))}</span>`;
         
-        // Use avatar
-        const avatar = createAvatarHTML(player.name);
+        // Use avatar - check if this is the current player
+        const isCurrentPlayer = player.name === currentPlayerName;
+        const avatar = createAvatarHTML(player.name, isCurrentPlayer);
         div.innerHTML = `
             <div class="player-info">
                 ${avatar}
@@ -1877,6 +2609,9 @@ function startGame() {
 let currentMaxTime = 10; // Store max time for circular timer
 
 function showQuestion(data) {
+    // Ensure we're on the game screen
+    showScreen('gameScreen');
+    
     hasBuzzed = false; canAnswer = false;
     document.getElementById('questionText').textContent = data.q;
     
@@ -1895,7 +2630,7 @@ function showQuestion(data) {
     const questionBox = document.querySelector('#gameScreen .question-box');
     if (questionBox) {
         questionBox.classList.remove('entering');
-        void questionBox.offsetWidth; // Force reflow
+        void questionBox.offsetWidth;
         questionBox.classList.add('entering');
     }
     
@@ -1945,10 +2680,9 @@ function showQuestion(data) {
         optionsBox.innerHTML = '';
         data.options.forEach((option, idx) => {
             const div = document.createElement('div'); 
-            div.className = 'option'; 
+            div.className = 'option visible'; // Make visible immediately
             div.textContent = option; 
             div.onclick = () => answerQuestion(idx);
-            // Add staggered animation
             div.style.animationDelay = (idx * 0.1) + 's';
             optionsBox.appendChild(div);
         });
@@ -1970,9 +2704,38 @@ function handleBuzzed(data) {
     showMessage(`🔔 ${playerName} buzzed!`);
     playSfx('buzzer');
     const buzzer = document.getElementById('buzzer');
-    if (buzzer) { buzzer.disabled = true; buzzer.classList.add('buzzed'); buzzer.textContent = `${playerName} BUZZED!`; }
+    if (buzzer) { 
+        buzzer.disabled = true; 
+        buzzer.classList.add('buzzed'); 
+        buzzer.textContent = `${playerName} BUZZED!`; 
+    }
+    
     const myName = document.getElementById('createName')?.value || document.getElementById('joinName')?.value;
-    if (playerName === myName) { canAnswer = true; document.querySelectorAll('#optionsBox .option').forEach(opt => opt.classList.add('visible')); }
+    if (playerName === myName) { 
+        canAnswer = true; 
+        // Show options for the player who buzzed
+        document.querySelectorAll('#optionsBox .option').forEach(opt => {
+            opt.classList.add('visible');
+            opt.style.display = 'block';
+        }); 
+    }
+    
+    // Highlight the player who buzzed
+    highlightBuzzedPlayer(playerName);
+}
+
+function highlightBuzzedPlayer(playerName) {
+    // Remove previous highlights
+    document.querySelectorAll('.player-card-clubhouse').forEach(card => {
+        card.classList.remove('active-buzzer');
+    });
+    // Add highlight to buzzing player
+    document.querySelectorAll('.player-card-clubhouse').forEach(card => {
+        const nameEl = card.querySelector('.player-card-name');
+        if (nameEl && nameEl.textContent === playerName) {
+            card.classList.add('active-buzzer');
+        }
+    });
 }
 
 function answerQuestion(idx) {
@@ -1984,9 +2747,11 @@ function answerQuestion(idx) {
 
 function showResult(data) {
     clearInterval(timerInterval);
+    
     document.querySelectorAll('#optionsBox .option').forEach((opt, idx) => {
         opt.classList.add('visible'); 
         opt.onclick = null;
+        
         // Mark correct answer
         if (opt.textContent === data.answer) { 
             opt.classList.add('correct'); 
@@ -1994,24 +2759,28 @@ function showResult(data) {
         }
         // Mark incorrect answer that was selected (if wrong)
         if (!data.correct && data.selectedIdx !== undefined && idx === data.selectedIdx) {
-            opt.classList.add('incorrect');
+            opt.classList.add('wrong');
         }
     });
+    
     const myName = document.getElementById('createName')?.value || document.getElementById('joinName')?.value;
-    if (data.answeredBy === myName) { 
+    if (data.answeredBy === myName || (data.timeout && data.pointsEarned)) { 
+        const pointsEarned = data.pointsEarned || 0;
+        
         if (data.correct) { 
             playSfx('correct');
-            showPointsPopup('+100', true);
+            showPointsPopup(`+${pointsEarned}`, true);
             showFeedbackFlash(true);
             createConfetti(30); 
         } else { 
             playSfx('wrong');
-            showPointsPopup('✗', false);
+            showPointsPopup(pointsEarned < 0 ? `${pointsEarned}` : '✗', false);
             showFeedbackFlash(false);
             shakeScreen(); 
         } 
     }
     updateScores(data.scores);
+    updatePlayerCardsScores(data.scores); // Update clubhouse player cards
     if (data.teamScores) updateTeamScores(data.teamScores);
     showMessage(data.message || (data.correct ? '✅ Correct!' : `❌ Wrong! Answer: ${data.answer}`));
     
@@ -2061,6 +2830,95 @@ function updateTeamScores(teamScores) {
     teamDiv.innerHTML = `<div class="team-score-box red ${!teamScores.red.active ? 'eliminated' : ''}"><div>${t('teamRed')}</div><div style="font-size:24px;margin-top:5px;">${teamScores.red.score}</div>${!teamScores.red.active ? '<div style="font-size:10px;">ELIMINATED</div>' : ''}</div><div class="team-score-box blue ${!teamScores.blue.active ? 'eliminated' : ''}"><div>${t('teamBlue')}</div><div style="font-size:24px;margin-top:5px;">${teamScores.blue.score}</div>${!teamScores.blue.active ? '<div style="font-size:10px;">ELIMINATED</div>' : ''}</div>`;
 }
 
+// Player card colors for clubhouse style
+const playerCardColors = ['pink', 'blue', 'yellow', 'green'];
+
+// Render player cards on game screen (Nintendo style) - split into left and right columns
+function renderPlayerCards(players, scores = {}) {
+    const leftColumn = document.getElementById('leftPlayersColumn');
+    const rightColumn = document.getElementById('rightPlayersColumn');
+    
+    if (!leftColumn || !rightColumn) return;
+    
+    leftColumn.innerHTML = '';
+    rightColumn.innerHTML = '';
+    
+    const currentPlayerName = document.getElementById('createName')?.value || 
+                              document.getElementById('joinName')?.value || '';
+    
+    players.forEach((player, idx) => {
+        const name = typeof player === 'string' ? player : player.name;
+        const score = scores[name] || 0;
+        const colorClass = playerCardColors[idx % playerCardColors.length];
+        const isCurrentPlayer = name === currentPlayerName;
+        
+        // Generate avatar URL
+        let avatarUrl;
+        if (isCurrentPlayer && currentAvatar) {
+            avatarUrl = generateAvatarUrl(currentAvatar);
+        } else {
+            avatarUrl = generateAvatarUrlFromName(name);
+        }
+        
+        const card = document.createElement('div');
+        card.className = `player-card-clubhouse ${colorClass}`;
+        card.dataset.playerName = name;
+        card.innerHTML = `
+            <div class="player-avatar-clubhouse">
+                <img src="${avatarUrl}" alt="${name}">
+            </div>
+            <div class="player-card-name">${name}</div>
+            <div class="player-card-score">${score} Pts</div>
+        `;
+        
+        // Distribute players: first 2 on left, next 2 on right
+        if (idx < 2) {
+            leftColumn.appendChild(card);
+        } else {
+            rightColumn.appendChild(card);
+        }
+    });
+}
+
+// Update player card scores
+function updatePlayerCardsScores(scores) {
+    document.querySelectorAll('.player-card-clubhouse').forEach(card => {
+        const name = card.dataset.playerName;
+        if (name && scores[name] !== undefined) {
+            const scoreEl = card.querySelector('.player-card-score');
+            if (scoreEl) {
+                scoreEl.textContent = `${scores[name]} Pts`;
+                // Add score animation
+                scoreEl.classList.add('score-updated');
+                setTimeout(() => scoreEl.classList.remove('score-updated'), 500);
+            }
+        }
+    });
+}
+
+// Initialize player cards when game starts
+function initializeGameScreen(players, scores = {}) {
+    renderPlayerCards(players, scores);
+    
+    // Reset UI elements
+    const buzzer = document.getElementById('buzzer');
+    if (buzzer) {
+        buzzer.style.display = 'flex';
+        buzzer.disabled = false;
+        buzzer.classList.remove('buzzed');
+    }
+    
+    const optionsBox = document.getElementById('optionsBox');
+    if (optionsBox) {
+        optionsBox.style.display = 'none';
+    }
+    
+    const statusText = document.getElementById('statusText');
+    if (statusText) {
+        statusText.textContent = 'Get ready for the next question!';
+    }
+}
+
 function showGameOver(data) {
     clearInterval(timerInterval);
     
@@ -2087,21 +2945,77 @@ function closePodiumAndShowMultiGameOver() {
     }
     
     showScreen('gameOverScreen');
+    
+    // Update winner announcement
     const winnerBox = document.getElementById('winnerBox');
-    if (winnerBox) winnerBox.textContent = data.winner ? `🏆 Winner: ${data.winner}` : (data.reason || 'Game Over!');
-    const finalScores = document.getElementById('finalScores');
-    if (finalScores) {
-        finalScores.innerHTML = `<h3>${t('finalScores')}</h3>`;
-        if (data.teamScores) {
-            const td = document.createElement('div'); td.className = 'team-scores';
-            td.innerHTML = `<div class="team-score-box red"><div>${t('teamRed')}</div><div style="font-size:24px;">${data.teamScores.red.score}</div></div><div class="team-score-box blue"><div>${t('teamBlue')}</div><div style="font-size:24px;">${data.teamScores.blue.score}</div></div>`;
-            finalScores.appendChild(td);
+    if (winnerBox) {
+        const winnerName = winnerBox.querySelector('.winner-name');
+        if (winnerName) {
+            winnerName.textContent = data.winner ? `${data.winner} wins!` : (data.reason || 'Game Over!');
         }
-        Object.entries(data.finalScores).sort((a, b) => b[1] - a[1]).forEach(([name, score]) => {
-            const div = document.createElement('div'); div.className = 'score-row'; div.innerHTML = `<span>${name}</span><span>${score}</span>`;
-            finalScores.appendChild(div);
-        });
     }
+    
+    // Sort players by score
+    const sortedPlayers = Object.entries(data.finalScores)
+        .map(([name, score]) => ({ name, score }))
+        .sort((a, b) => b.score - a.score);
+    
+    const currentPlayerName = document.getElementById('createName')?.value || 
+                              document.getElementById('joinName')?.value || '';
+    
+    // Render podium with avatars
+    const podiumContainer = document.getElementById('podiumClubhouse');
+    if (podiumContainer && sortedPlayers.length >= 1) {
+        let podiumHTML = '';
+        
+        // Top 3 for podium
+        const podiumPlayers = sortedPlayers.slice(0, 3);
+        const positions = ['first', 'second', 'third'];
+        const medals = ['🥇', '🥈', '🥉'];
+        
+        podiumPlayers.forEach((player, idx) => {
+            const isCurrentPlayer = player.name === currentPlayerName;
+            const avatarUrl = isCurrentPlayer && currentAvatar ? 
+                generateAvatarUrl(currentAvatar) : generateAvatarUrlFromName(player.name);
+            
+            podiumHTML += `
+                <div class="podium-place-clubhouse ${positions[idx]}">
+                    <div class="podium-avatar-frame">
+                        <img src="${avatarUrl}" alt="${player.name}">
+                    </div>
+                    <div class="podium-player-name">${player.name}</div>
+                    <div class="podium-player-score">${player.score} pts</div>
+                    <div class="podium-stand">${idx + 1}</div>
+                </div>
+            `;
+        });
+        
+        podiumContainer.innerHTML = podiumHTML;
+    }
+    
+    // Render leaderboard with avatars
+    const leaderboardList = document.getElementById('leaderboardList');
+    if (leaderboardList) {
+        leaderboardList.innerHTML = sortedPlayers.map((player, idx) => {
+            const isCurrentPlayer = player.name === currentPlayerName;
+            const avatarUrl = isCurrentPlayer && currentAvatar ? 
+                generateAvatarUrl(currentAvatar) : generateAvatarUrlFromName(player.name);
+            
+            return `
+                <div class="leaderboard-item">
+                    <div class="leaderboard-rank">${idx + 1}</div>
+                    <div class="leaderboard-avatar">
+                        <img src="${avatarUrl}" alt="${player.name}">
+                    </div>
+                    <div class="leaderboard-name">${player.name}</div>
+                    <div class="leaderboard-score">${player.score} pts</div>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    // Trigger celebration
+    createConfetti(80);
 }
 
 function showMessage(text) { const box = document.getElementById('messageBox'); if (box) { box.textContent = text; box.style.display = 'block'; } }
@@ -2175,11 +3089,15 @@ function getInitials(name) {
         .toUpperCase();
 }
 
-// Create avatar HTML
-function createAvatarHTML(name) {
-    const color = getAvatarColor(name);
-    const initials = getInitials(name);
-    return `<div class="player-avatar" style="background: ${color};">${initials}</div>`;
+// Create avatar HTML with DiceBear
+function createAvatarHTML(name, isCurrentPlayer = false) {
+    let avatarUrl;
+    if (isCurrentPlayer && currentAvatar) {
+        avatarUrl = generateAvatarUrl(currentAvatar);
+    } else {
+        avatarUrl = generateAvatarUrlFromName(name);
+    }
+    return `<div class="player-avatar"><img src="${avatarUrl}" alt="${name}" class="player-avatar-img"></div>`;
 }
 
 // Create circular timer HTML
@@ -2471,4 +3389,3 @@ showHome = function() {
     cleanupVoiceChat();
     originalShowHome();
 };
-
