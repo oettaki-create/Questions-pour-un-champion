@@ -7,6 +7,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional, List
 
+# === SCORING CONFIGURATION ===
+WRONG_ANSWER_PENALTY = 5      # Points lost for wrong answer
+TIMEOUT_PENALTY = 5           # Points lost for timeout
+MIN_CORRECT_POINTS = 10       # Minimum points for correct answer (slow response)
+MAX_CORRECT_POINTS = 100      # Maximum points for correct answer (instant response)
+
+def calculate_time_score(time_left: float, max_time: float) -> int:
+    """Calculate score based on remaining time"""
+    if max_time <= 0:
+        return MIN_CORRECT_POINTS
+    time_ratio = max(0, min(1, time_left / max_time))
+    score = int(MIN_CORRECT_POINTS + (MAX_CORRECT_POINTS - MIN_CORRECT_POINTS) * time_ratio)
+    return score
+
 # Load environment variables from .env file (for local development)
 try:
     from dotenv import load_dotenv
@@ -265,13 +279,23 @@ async def timer_task(code: str):
                 q = room["current_q"]
                 lang = room.get("language", "en")
                 
+                # If someone buzzed but didn't answer in time, apply penalty
+                if room["buzzed"]:
+                    buzzed_player = room["players"].get(room["buzzed"])
+                    if buzzed_player:
+                        buzzed_player["score"] = max(0, buzzed_player["score"] - TIMEOUT_PENALTY)
+                        # Deduct from team if team mode
+                        if room["game_mode"] == "team" and buzzed_player.get("team"):
+                            room["teams"][buzzed_player["team"]]["score"] = max(0, room["teams"][buzzed_player["team"]]["score"] - TIMEOUT_PENALTY)
+                
                 await broadcast(code, "answerResult", {
                     "correct": False,
                     "answer": q["options"][q["correct"]],
                     "scores": {p["name"]: p["score"] for p in room["players"].values()},
                     "timeout": True,
                     "message": get_text(lang, "timeout"),
-                    "teamScores": room.get("teams") if room["game_mode"] == "team" else None
+                    "teamScores": room.get("teams") if room["game_mode"] == "team" else None,
+                    "pointsEarned": -TIMEOUT_PENALTY if room["buzzed"] else 0
                 })
                 
                 await asyncio.sleep(3)
@@ -621,6 +645,12 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                 name = msg.get("playerName", "").strip()
                 selected_team = msg.get("team")  # NEW: Get team selection from player
                 
+                # Check 4-player maximum limit
+                MAX_PLAYERS = 4
+                if len(room["players"]) >= MAX_PLAYERS:
+                    await ws.send_json({"event": "error", "data": get_text(lang, "room_full")})
+                    continue
+                
                 if not validate_player_name(name):
                     await ws.send_json({"event": "error", "data": get_text(lang, "invalid_name")})
                     continue
@@ -673,14 +703,14 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                     }
                 })
 
-                # Determine if can start
+                # Determine if can start (2-4 players for FFA, exactly 4 for team)
                 can_start = False
                 if room["game_mode"] == "team":
                     red_count = sum(1 for p in room["players"].values() if p.get("team") == "red")
                     blue_count = sum(1 for p in room["players"].values() if p.get("team") == "blue")
                     can_start = len(room["players"]) == 4 and red_count == 2 and blue_count == 2
                 else:
-                    can_start = len(room["players"]) >= 2
+                    can_start = len(room["players"]) >= 2 and len(room["players"]) <= MAX_PLAYERS
 
                 await broadcast(code, "players", {
                     "players": [
@@ -693,6 +723,7 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                         for uid, p in room["players"].items()
                     ],
                     "count": len(room["players"]),
+                    "maxPlayers": MAX_PLAYERS,
                     "canStart": can_start,
                     "gameMode": room["game_mode"],
                     "teamCounts": {
@@ -840,11 +871,24 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                         continue
 
                     correct = idx == q["correct"]
+                    points_earned = 0
+                    
                     if correct:
-                        player["score"] += 1
+                        # Calculate time-based score
+                        elapsed = time.time() - room.get("question_start_time", time.time())
+                        time_left = max(0, room.get("max_time", 10) - elapsed)
+                        points_earned = calculate_time_score(time_left, room.get("max_time", 10))
+                        player["score"] += points_earned
                         # Add score to team if team mode
                         if room["game_mode"] == "team" and player.get("team"):
-                            room["teams"][player["team"]]["score"] += 1
+                            room["teams"][player["team"]]["score"] += points_earned
+                    else:
+                        # Penalty for wrong answer
+                        points_earned = -WRONG_ANSWER_PENALTY
+                        player["score"] = max(0, player["score"] - WRONG_ANSWER_PENALTY)
+                        # Deduct from team if team mode
+                        if room["game_mode"] == "team" and player.get("team"):
+                            room["teams"][player["team"]]["score"] = max(0, room["teams"][player["team"]]["score"] - WRONG_ANSWER_PENALTY)
 
                     correct_answer = q["options"][q["correct"]]
                     message = get_text(lang, "correct") if correct else get_text(lang, "wrong", answer=correct_answer)
@@ -856,7 +900,8 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                         "message": message,
                         "scores": {p["name"]: p["score"] for p in room["players"].values()},
                         "teamScores": room.get("teams") if room["game_mode"] == "team" else None,
-                        "selectedIdx": idx
+                        "selectedIdx": idx,
+                        "pointsEarned": points_earned  # Send points earned to client for display
                     })
 
                     await asyncio.sleep(3)
@@ -908,6 +953,8 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                 await cleanup_room(code)
 
 # === GAME LOGIC ===
+
+ #KANE
 async def start_question(code: str):
     room = get_room(code)
     if not room:
@@ -965,6 +1012,8 @@ async def start_question(code: str):
     q = room["available"].pop()
     room["current_q"] = q
     room["timer"] = q.get("time", 10)
+    room["max_time"] = room["timer"]  # Store max time for scoring calculation
+    room["question_start_time"] = time.time()  # Store start time for scoring
     room["buzzed"] = None
     room["answered"] = False
     room["state"] = "question"
@@ -988,7 +1037,7 @@ async def start_question(code: str):
     await broadcast(code, "question", question_data)
     
     asyncio.create_task(timer_task(code))
-
+#KANE
 async def next_question(code: str):
     room = get_room(code)
     if not room:
