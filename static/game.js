@@ -4,7 +4,7 @@
 
 const SUPABASE_URL = 'https://aczqcdgjvwjtalvrzhcz.supabase.co';
 // NOTE: Replace this with your actual anon key from Supabase Dashboard > Settings > API > anon public
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjenFjZGdqdndqdGFsdnJ6aGN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NDQ5NzMsImV4cCI6MjA4NDMyMDk3M30.O8OiZb2bsnpEP6T64hIDfKcJ12dc_CXsOInZvzL_J7o';
+const SUPABASE_ANON_KEY = 'sb_secret_6XXLZHFuyqPs9XPgvy1Imw_4yG52lvs';
 
 // Current logged in player
 let currentPlayer = null;
@@ -12,7 +12,7 @@ let currentPlayer = null;
 // Supabase API helper
 async function supabaseRequest(endpoint, method = 'GET', body = null) {
     // Check if Supabase is configured
-    if (SUPABASE_ANON_KEY === 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjenFjZGdqdndqdGFsdnJ6aGN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NDQ5NzMsImV4cCI6MjA4NDMyMDk3M30.O8OiZb2bsnpEP6T64hIDfKcJ12dc_CXsOInZvzL_J7o') {
+    if (SUPABASE_ANON_KEY === ('sb_secret_6XXLZHFuyqPs9XPgvy1Imw_4yG52lvs') {
         throw new Error('Supabase not configured. Please set your anon key.');
     }
     
@@ -3389,4 +3389,5 @@ showHome = function() {
     cleanupVoiceChat();
     originalShowHome();
 };
+
 
