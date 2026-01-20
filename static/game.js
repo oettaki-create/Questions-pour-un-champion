@@ -571,9 +571,9 @@ function renderCategoryTabs() {
     if (!container) return;
     
     container.innerHTML = Object.entries(categoryConfig).map(([key, config]) => `
-        <div class="category-pill ${currentCategory === key ? 'active' : ''}" onclick="selectCategory('${key}')">
-            <span class="pill-icon">${config.icon}</span>
-            <span class="pill-label">${config.label[selectedLanguage] || config.label.en}</span>
+        <div class="avatar-category-tab ${currentCategory === key ? 'active' : ''}" onclick="selectCategory('${key}')">
+            <span class="tab-icon">${config.icon}</span>
+            <span class="tab-label">${config.label[selectedLanguage] || config.label.en}</span>
         </div>
     `).join('');
 }
@@ -596,11 +596,11 @@ function renderAvatarOptions() {
     
     if (isColor) {
         const colorMap = currentCategory === 'skinColor' ? skinColorHex : hairColorHex;
-        html += `<div class="color-grid-new">`;
+        html += `<div class="avatar-color-grid">`;
         options.forEach(opt => {
             const selected = currentAvatar[currentCategory] === opt;
             const hexColor = colorMap[opt] || '#' + opt;
-            html += `<button class="color-btn-new ${selected ? 'selected' : ''}" 
+            html += `<button class="avatar-color-btn ${selected ? 'selected' : ''}" 
                 style="background-color: ${hexColor};" 
                 onclick="selectAvatarOption('${currentCategory}', '${opt}')"
                 title="${opt}">
@@ -608,7 +608,7 @@ function renderAvatarOptions() {
         });
         html += `</div>`;
     } else {
-        html += `<div class="options-grid-new avatar-preview-grid">`;
+        html += `<div class="avatar-options-grid">`;
         options.forEach((opt, idx) => {
             const selected = currentAvatar[currentCategory] === opt;
             
@@ -620,9 +620,9 @@ function renderAvatarOptions() {
             // Special label for empty option
             const isEmpty = opt === '';
             
-            html += `<button class="option-btn-new avatar-option-preview ${selected ? 'selected' : ''} ${isEmpty ? 'empty-option' : ''}" 
+            html += `<button class="avatar-option-btn ${selected ? 'selected' : ''}" 
                 onclick="selectAvatarOption('${currentCategory}', '${opt}')">
-                ${isEmpty ? '<span class="empty-icon">❌</span>' : `<img src="${previewUrl}" alt="${opt || 'None'}" loading="lazy">`}
+                ${isEmpty ? '<span style="font-size:20px">❌</span>' : `<img src="${previewUrl}" alt="${opt || 'None'}" loading="lazy">`}
             </button>`;
         });
         html += `</div>`;
@@ -705,7 +705,9 @@ const translations = {
         createAndJoin: "Create & Join",
         back: "Back",
         roomCode: "Room Code",
+        continue: "Continue",
         // Avatar translations
+        avatarStudio: "Avatar Studio",
         dressingRoom: "Dressing Room",
         customize: "Customize Avatar",
         randomize: "Randomize",
@@ -751,8 +753,10 @@ const translations = {
         score: "Score",
         correct: "✅ Correct!",
         wrong: "❌ Wrong! Correct answer:",
+        timeout: "⏰ Time's up!",
         round: "Round",
         question: "Question",
+        winner: "Winner",
         // Public rooms translations
         roomVisibility: "Room Visibility:",
         privateRoom: "Private",
@@ -784,6 +788,24 @@ const translations = {
         aiErrorConnection: "Connection error. Please try again.",
         selectAll: "Select All",
         deselectAll: "Deselect All",
+        advancedOptions: "Advanced Options",
+        // Home screen
+        welcome: "Welcome",
+        guest: "Guest",
+        playAsGuest: "Play as Guest",
+        loginOrRegister: "Login / Register",
+        globalLeaderboard: "Global Leaderboard",
+        editAvatar: "Edit Avatar",
+        logout: "Logout",
+        // Auth
+        username: "Username",
+        password: "Password",
+        login: "Login",
+        register: "Register",
+        // Stats
+        gamesPlayed: "Games Played",
+        gamesWon: "Games Won",
+        highScore: "High Score",
         subjects: {
             science: "🔬 Science",
             history: "📚 History",
@@ -813,7 +835,9 @@ const translations = {
         createAndJoin: "Créer et rejoindre",
         back: "Retour",
         roomCode: "Code de la salle",
+        continue: "Continuer",
         // Avatar translations
+        avatarStudio: "Studio Avatar",
         dressingRoom: "Vestiaire",
         customize: "Personnaliser l'avatar",
         randomize: "Aléatoire",
@@ -859,8 +883,10 @@ const translations = {
         score: "Score",
         correct: "✅ Correct !",
         wrong: "❌ Faux ! Bonne réponse:",
+        timeout: "⏰ Temps écoulé !",
         round: "Manche",
         question: "Question",
+        winner: "Gagnant",
         // Public rooms translations
         roomVisibility: "Visibilité de la salle:",
         privateRoom: "Privée",
@@ -892,6 +918,24 @@ const translations = {
         aiErrorConnection: "Erreur de connexion. Veuillez réessayer.",
         selectAll: "Tout sélectionner",
         deselectAll: "Tout désélectionner",
+        advancedOptions: "Options avancées",
+        // Home screen
+        welcome: "Bienvenue",
+        guest: "Invité",
+        playAsGuest: "Jouer en tant qu'invité",
+        loginOrRegister: "Connexion / Inscription",
+        globalLeaderboard: "Classement Mondial",
+        editAvatar: "Modifier l'avatar",
+        logout: "Déconnexion",
+        // Auth
+        username: "Nom d'utilisateur",
+        password: "Mot de passe",
+        login: "Connexion",
+        register: "S'inscrire",
+        // Stats
+        gamesPlayed: "Parties jouées",
+        gamesWon: "Parties gagnées",
+        highScore: "Meilleur score",
         subjects: {
             science: "🔬 Science",
             history: "📚 Histoire",
@@ -2548,13 +2592,29 @@ function showFeedbackFlash(isCorrect) {
     setTimeout(() => overlay.remove(), 600);
 }
 
-// Podium Celebration
+// Podium Celebration with Avatars
 function showPodiumCelebration(players, isSolo = false) {
     // Sort by score
     const sorted = [...players].sort((a, b) => b.score - a.score);
     
     // Store mode for the close function
     window.podiumIsSolo = isSolo;
+    
+    // Get avatars for players
+    const gamePlayers = window.currentGamePlayers || [];
+    const currentPlayerName = document.getElementById('createName')?.value || 
+                              document.getElementById('joinName')?.value || '';
+    
+    function getPlayerAvatar(name) {
+        const serverPlayer = gamePlayers.find(p => p.name === name);
+        if (serverPlayer && serverPlayer.avatar) {
+            return generateAvatarUrl(serverPlayer.avatar);
+        } else if (name === currentPlayerName && currentAvatar) {
+            return generateAvatarUrl(currentAvatar);
+        } else {
+            return generateAvatarUrlFromName(name);
+        }
+    }
     
     const overlay = document.createElement('div');
     overlay.className = 'podium-overlay';
@@ -2563,30 +2623,37 @@ function showPodiumCelebration(players, isSolo = false) {
         <div class="podium-container">
             ${sorted.length > 1 ? `
             <div class="podium-place second" style="animation-delay: 0.3s;">
-                <div class="podium-avatar" style="background: linear-gradient(135deg, #C0C0C0, #A9A9A9);">🥈</div>
+                <div class="podium-avatar">
+                    <img src="${getPlayerAvatar(sorted[1]?.name)}" alt="${sorted[1]?.name || ''}">
+                    <span class="podium-medal">🥈</span>
+                </div>
                 <div class="podium-name">${sorted[1]?.name || '-'}</div>
-                <div class="podium-score">${sorted[1]?.score || 0}</div>
-                <div class="podium-stand">2</div>
+                <div class="podium-score">${sorted[1]?.score || 0} pts</div>
+                <div class="podium-stand second-stand">2</div>
             </div>
             ` : ''}
             <div class="podium-place first" style="animation-delay: 0.6s;">
-                <div class="podium-avatar" style="background: linear-gradient(135deg, #FFD700, #FFA500);">🥇</div>
+                <div class="podium-avatar">
+                    <img src="${getPlayerAvatar(sorted[0]?.name)}" alt="${sorted[0]?.name || ''}">
+                    <span class="podium-medal">🥇</span>
+                </div>
                 <div class="podium-name">${sorted[0]?.name || '-'}</div>
-                <div class="podium-score">${sorted[0]?.score || 0}</div>
-                <div class="podium-stand">1</div>
+                <div class="podium-score">${sorted[0]?.score || 0} pts</div>
+                <div class="podium-stand first-stand">1</div>
             </div>
             ${sorted.length > 2 ? `
             <div class="podium-place third" style="animation-delay: 0.9s;">
-                <div class="podium-avatar" style="background: linear-gradient(135deg, #CD7F32, #8B4513);">🥉</div>
+                <div class="podium-avatar">
+                    <img src="${getPlayerAvatar(sorted[2]?.name)}" alt="${sorted[2]?.name || ''}">
+                    <span class="podium-medal">🥉</span>
+                </div>
                 <div class="podium-name">${sorted[2]?.name || '-'}</div>
-                <div class="podium-score">${sorted[2]?.score || 0}</div>
-                <div class="podium-stand">3</div>
+                <div class="podium-score">${sorted[2]?.score || 0} pts</div>
+                <div class="podium-stand third-stand">3</div>
             </div>
             ` : ''}
         </div>
-        <div class="podium-continue">
-            <button class="btn" onclick="closePodium()">${t('playAgain')}</button>
-        </div>
+        <button class="btn podium-btn" onclick="closePodium()">${t('continue')}</button>
     `;
     
     document.body.appendChild(overlay);
@@ -3174,12 +3241,12 @@ function handleBuzzed(data) {
 
 function highlightBuzzedPlayer(playerName) {
     // Remove previous highlights
-    document.querySelectorAll('.player-card-clubhouse').forEach(card => {
+    document.querySelectorAll('.player-card').forEach(card => {
         card.classList.remove('active-buzzer');
     });
     // Add highlight to buzzing player
-    document.querySelectorAll('.player-card-clubhouse').forEach(card => {
-        const nameEl = card.querySelector('.player-card-name');
+    document.querySelectorAll('.player-card').forEach(card => {
+        const nameEl = card.querySelector('.player-name');
         if (nameEl && nameEl.textContent === playerName) {
             card.classList.add('active-buzzer');
         }
@@ -3234,9 +3301,8 @@ function showResult(data) {
         } 
     }
     updateScores(data.scores);
-    updatePlayerCardsScores(data.scores); // Update clubhouse player cards
     if (data.teamScores) updateTeamScores(data.teamScores);
-    showMessage(data.message || (data.correct ? '✅ Correct!' : `❌ Wrong! Answer: ${data.answer}`));
+    showMessage(data.message || (data.correct ? t('correct') : `${t('wrong')} ${data.answer}`));
     
     // Show animated leaderboard after a delay
     setTimeout(() => {
@@ -3258,7 +3324,7 @@ function updateScores(scores) {
         const div = document.createElement('div'); 
         div.className = 'score-row';
         const avatar = createAvatarHTML(name);
-        const percentage = (score / maxScore) * 100;
+        const percentage = Math.max(0, (score / maxScore) * 100);
         
         div.innerHTML = `
             <div class="player-info">
@@ -3269,11 +3335,14 @@ function updateScores(scores) {
                 <div class="player-score-bar">
                     <div class="player-score-fill" style="width: ${percentage}%"></div>
                 </div>
-                <span class="player-score-text">${score}</span>
+                <span class="player-score-text ${score < 0 ? 'negative' : ''}">${score}</span>
             </div>
         `;
         scoresBox.appendChild(div);
     });
+    
+    // Also update player cards on game screen
+    updatePlayerCardsScores(scores);
 }
 
 function updateTeamScores(teamScores) {
@@ -3287,15 +3356,16 @@ function updateTeamScores(teamScores) {
 // Player card colors for clubhouse style
 const playerCardColors = ['pink', 'blue', 'yellow', 'green'];
 
-// Render player cards on game screen (Nintendo style) - split into left and right columns
+// Render player cards on game screen - Horizontal layout at top
 function renderPlayerCards(players, scores = {}) {
-    const leftColumn = document.getElementById('leftPlayersColumn');
-    const rightColumn = document.getElementById('rightPlayersColumn');
+    const container = document.getElementById('playersListHorizontal');
     
-    if (!leftColumn || !rightColumn) return;
+    if (!container) {
+        console.error('Players list container not found');
+        return;
+    }
     
-    leftColumn.innerHTML = '';
-    rightColumn.innerHTML = '';
+    container.innerHTML = '';
     
     const currentPlayerName = document.getElementById('createName')?.value || 
                               document.getElementById('joinName')?.value || '';
@@ -3303,12 +3373,22 @@ function renderPlayerCards(players, scores = {}) {
     // Get stored game players for avatar info
     const gamePlayers = window.currentGamePlayers || [];
     
-    const playerCount = players.length;
+    // Sort players by score for ranking
+    const sortedPlayers = [...players].map((player, idx) => {
+        const name = typeof player === 'string' ? player : player.name;
+        return { name, score: scores[name] || 0, originalIndex: idx };
+    }).sort((a, b) => b.score - a.score);
+    
+    // Assign ranks
+    const ranks = {};
+    sortedPlayers.forEach((p, idx) => {
+        ranks[p.name] = idx + 1;
+    });
     
     players.forEach((player, idx) => {
         const name = typeof player === 'string' ? player : player.name;
         const score = scores[name] || 0;
-        const colorClass = playerCardColors[idx % playerCardColors.length];
+        const rank = ranks[name];
         
         // Get avatar from server data or fallback
         let avatarUrl;
@@ -3321,58 +3401,63 @@ function renderPlayerCards(players, scores = {}) {
             avatarUrl = generateAvatarUrlFromName(name);
         }
         
+        // Determine rank class
+        let rankClass = '';
+        if (rank === 1) rankClass = 'rank-1';
+        else if (rank === 2) rankClass = 'rank-2';
+        else if (rank === 3) rankClass = 'rank-3';
+        
+        // Score styling
+        const scoreClass = score < 0 ? 'negative' : '';
+        
         const card = document.createElement('div');
-        card.className = `player-card-clubhouse ${colorClass}`;
+        card.className = `player-card ${rankClass}`;
         card.dataset.playerName = name;
         card.innerHTML = `
-            <div class="player-avatar-clubhouse">
+            <div class="player-avatar">
                 <img src="${avatarUrl}" alt="${name}">
             </div>
-            <div class="player-card-name">${name}</div>
-            <div class="player-card-score">${score} Pts</div>
+            <div class="player-info">
+                <div class="player-name">${name}</div>
+                <div class="player-score ${scoreClass}">${score} pts</div>
+            </div>
         `;
         
-        // Smart distribution based on player count
-        // 2 players: 1 left, 1 right
-        // 3 players: 2 left, 1 right (or 1 left, 2 right)
-        // 4 players: 2 left, 2 right
-        if (playerCount === 2) {
-            // 1 on each side
-            if (idx === 0) {
-                leftColumn.appendChild(card);
-            } else {
-                rightColumn.appendChild(card);
-            }
-        } else if (playerCount === 3) {
-            // 1 left, 2 right OR 2 left, 1 right
-            if (idx === 0) {
-                leftColumn.appendChild(card);
-            } else {
-                rightColumn.appendChild(card);
-            }
-        } else {
-            // 4 players: 2 on each side
-            if (idx < 2) {
-                leftColumn.appendChild(card);
-            } else {
-                rightColumn.appendChild(card);
-            }
-        }
+        container.appendChild(card);
     });
+    
+    console.log('Player cards rendered:', players.length);
 }
 
 // Update player card scores
 function updatePlayerCardsScores(scores) {
-    document.querySelectorAll('.player-card-clubhouse').forEach(card => {
+    // Sort for ranking
+    const sortedScores = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+    const ranks = {};
+    sortedScores.forEach(([name], idx) => {
+        ranks[name] = idx + 1;
+    });
+    
+    document.querySelectorAll('.player-card').forEach(card => {
         const name = card.dataset.playerName;
         if (name && scores[name] !== undefined) {
-            const scoreEl = card.querySelector('.player-card-score');
+            const score = scores[name];
+            const rank = ranks[name];
+            
+            // Update score
+            const scoreEl = card.querySelector('.player-score');
             if (scoreEl) {
-                scoreEl.textContent = `${scores[name]} Pts`;
-                // Add score animation
+                scoreEl.textContent = `${score} pts`;
+                scoreEl.classList.toggle('negative', score < 0);
                 scoreEl.classList.add('score-updated');
                 setTimeout(() => scoreEl.classList.remove('score-updated'), 500);
             }
+            
+            // Update rank class
+            card.classList.remove('rank-1', 'rank-2', 'rank-3');
+            if (rank === 1) card.classList.add('rank-1');
+            else if (rank === 2) card.classList.add('rank-2');
+            else if (rank === 3) card.classList.add('rank-3');
         }
     });
 }
