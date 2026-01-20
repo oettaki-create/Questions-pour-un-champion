@@ -283,10 +283,10 @@ async def timer_task(code: str):
                 if room["buzzed"]:
                     buzzed_player = room["players"].get(room["buzzed"])
                     if buzzed_player:
-                        buzzed_player["score"] = max(0, buzzed_player["score"] - TIMEOUT_PENALTY)
+                        buzzed_player["score"] -= TIMEOUT_PENALTY  # Allow negative
                         # Deduct from team if team mode
                         if room["game_mode"] == "team" and buzzed_player.get("team"):
-                            room["teams"][buzzed_player["team"]]["score"] = max(0, room["teams"][buzzed_player["team"]]["score"] - TIMEOUT_PENALTY)
+                            room["teams"][buzzed_player["team"]]["score"] -= TIMEOUT_PENALTY
                 
                 await broadcast(code, "answerResult", {
                     "correct": False,
@@ -886,12 +886,12 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                         if room["game_mode"] == "team" and player.get("team"):
                             room["teams"][player["team"]]["score"] += points_earned
                     else:
-                        # Penalty for wrong answer
+                        # Penalty for wrong answer - allow negative scores
                         points_earned = -WRONG_ANSWER_PENALTY
-                        player["score"] = max(0, player["score"] - WRONG_ANSWER_PENALTY)
-                        # Deduct from team if team mode
+                        player["score"] -= WRONG_ANSWER_PENALTY
+                        # Deduct from team if team mode - allow negative
                         if room["game_mode"] == "team" and player.get("team"):
-                            room["teams"][player["team"]]["score"] = max(0, room["teams"][player["team"]]["score"] - WRONG_ANSWER_PENALTY)
+                            room["teams"][player["team"]]["score"] -= WRONG_ANSWER_PENALTY
 
                     correct_answer = q["options"][q["correct"]]
                     message = get_text(lang, "correct") if correct else get_text(lang, "wrong", answer=correct_answer)
