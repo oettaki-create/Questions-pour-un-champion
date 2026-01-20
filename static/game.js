@@ -4,7 +4,7 @@
 
 const SUPABASE_URL = 'https://aczqcdgjvwjtalvrzhcz.supabase.co';
 // NOTE: Replace this with your actual anon key from Supabase Dashboard > Settings > API > anon public
-const SUPABASE_ANON_KEY = 'sb_secret_6XXLZHFuyqPs9XPgvy1Imw_4yG52lvs';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjenFjZGdqdndqdGFsdnJ6aGN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NDQ5NzMsImV4cCI6MjA4NDMyMDk3M30.O8OiZb2bsnpEP6T64hIDfKcJ12dc_CXsOInZvzL_J7o';
 
 // Current logged in player
 let currentPlayer = null;
@@ -12,7 +12,7 @@ let currentPlayer = null;
 // Supabase API helper
 async function supabaseRequest(endpoint, method = 'GET', body = null) {
     // Check if Supabase is configured
-    if (SUPABASE_ANON_KEY === ('sb_secret_6XXLZHFuyqPs9XPgvy1Imw_4yG52lvs') {
+    if (SUPABASE_ANON_KEY === 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjenFjZGdqdndqdGFsdnJ6aGN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3NDQ5NzMsImV4cCI6MjA4NDMyMDk3M30.O8OiZb2bsnpEP6T64hIDfKcJ12dc_CXsOInZvzL_J7o') {
         throw new Error('Supabase not configured. Please set your anon key.');
     }
     
@@ -1357,6 +1357,404 @@ function setTheme(themeName) {
     
     // Change music to match theme
     loadThemeMusic(themeName);
+    
+    // Start horror effects if horror theme selected
+    if (themeName === 'horror') {
+        startHorrorEffects();
+    } else {
+        stopHorrorEffects();
+    }
+}
+
+// ============================================
+// HORROR THEME EFFECTS
+// ============================================
+
+let horrorActive = false;
+let horrorIntervals = [];
+let horrorTimeouts = [];
+
+const horrorMessages = [
+    "Regarde derrière toi...",
+    "Je suis dans tes murs...",
+    "Ne cligne pas des yeux...",
+    "Quelqu'un respire dans ton dos...",
+    "Je te vois jouer...",
+    "Tu ne peux pas gagner...",
+    "Le silence avant la tempête...",
+    "Sens-tu cette présence ?",
+    "Tes réponses ne te sauveront pas..."
+];
+
+function startHorrorEffects() {
+    if (horrorActive) return;
+    horrorActive = true;
+    console.log("👻 Horror effects activated");
+    
+    // Create horror overlay container
+    if (!document.getElementById('horror-overlay-container')) {
+        const container = document.createElement('div');
+        container.id = 'horror-overlay-container';
+        container.innerHTML = `
+            <style>
+                #horror-overlay-container {
+                    pointer-events: none;
+                    position: fixed;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    z-index: 9999;
+                }
+                
+                .horror-flicker {
+                    animation: horrorFlicker 0.1s infinite;
+                }
+                
+                @keyframes horrorFlicker {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.8; }
+                }
+                
+                .horror-notification {
+                    position: fixed;
+                    right: -300px;
+                    background: rgba(20, 0, 0, 0.95);
+                    color: #ff0000;
+                    padding: 15px 20px;
+                    border-left: 3px solid #ff0000;
+                    font-family: 'Creepster', cursive, sans-serif;
+                    font-size: 14px;
+                    z-index: 10000;
+                    transition: right 0.5s ease;
+                    box-shadow: -5px 0 20px rgba(255, 0, 0, 0.3);
+                    max-width: 280px;
+                }
+                
+                .horror-notification.show {
+                    right: 20px;
+                }
+                
+                .horror-notification::before {
+                    content: '👻';
+                    margin-right: 10px;
+                }
+                
+                .horror-demon {
+                    position: fixed;
+                    width: 150px;
+                    height: 200px;
+                    background: radial-gradient(ellipse at center, rgba(255,0,0,0.3) 0%, transparent 70%);
+                    opacity: 0;
+                    transition: opacity 2s ease;
+                    pointer-events: none;
+                    z-index: 9998;
+                }
+                
+                .horror-demon::after {
+                    content: '👁️';
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    font-size: 60px;
+                    filter: drop-shadow(0 0 10px red);
+                    animation: demonPulse 2s infinite;
+                }
+                
+                @keyframes demonPulse {
+                    0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.7; }
+                    50% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+                }
+                
+                .horror-glitch-text {
+                    animation: glitchText 0.3s infinite;
+                }
+                
+                @keyframes glitchText {
+                    0% { transform: translate(0); }
+                    20% { transform: translate(-2px, 2px); }
+                    40% { transform: translate(-2px, -2px); }
+                    60% { transform: translate(2px, 2px); }
+                    80% { transform: translate(2px, -2px); }
+                    100% { transform: translate(0); }
+                }
+                
+                .horror-vignette {
+                    position: fixed;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.8) 100%);
+                    pointer-events: none;
+                    z-index: 9997;
+                    opacity: 0;
+                    transition: opacity 3s ease;
+                }
+                
+                .horror-scanlines {
+                    position: fixed;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    background: repeating-linear-gradient(
+                        0deg,
+                        rgba(0, 0, 0, 0.1),
+                        rgba(0, 0, 0, 0.1) 1px,
+                        transparent 1px,
+                        transparent 2px
+                    );
+                    pointer-events: none;
+                    z-index: 9996;
+                    opacity: 0;
+                    transition: opacity 2s ease;
+                }
+                
+                .horror-blood-drip {
+                    position: fixed;
+                    top: -50px;
+                    width: 8px;
+                    height: 50px;
+                    background: linear-gradient(to bottom, #8B0000, #FF0000);
+                    border-radius: 0 0 4px 4px;
+                    animation: bloodDrip 4s ease-in forwards;
+                    z-index: 9999;
+                }
+                
+                @keyframes bloodDrip {
+                    0% { top: -50px; height: 50px; }
+                    70% { top: 100vh; height: 100px; }
+                    100% { top: 100vh; height: 0; opacity: 0; }
+                }
+                
+                .horror-jumpscare {
+                    position: fixed;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    background: black;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 10001;
+                    opacity: 0;
+                    pointer-events: none;
+                }
+                
+                .horror-jumpscare.active {
+                    opacity: 1;
+                    animation: jumpscareFlash 0.5s ease;
+                }
+                
+                .horror-jumpscare span {
+                    font-size: 150px;
+                    filter: drop-shadow(0 0 30px red);
+                }
+                
+                @keyframes jumpscareFlash {
+                    0% { opacity: 0; }
+                    10% { opacity: 1; }
+                    90% { opacity: 1; }
+                    100% { opacity: 0; }
+                }
+                
+                .cursor-horror {
+                    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ctext x='0' y='24' font-size='24'%3E🩸%3C/text%3E%3C/svg%3E"), auto !important;
+                }
+            </style>
+            
+            <div class="horror-vignette" id="horror-vignette"></div>
+            <div class="horror-scanlines" id="horror-scanlines"></div>
+            <div class="horror-demon" id="horror-demon"></div>
+            <div class="horror-jumpscare" id="horror-jumpscare"><span>👹</span></div>
+        `;
+        document.body.appendChild(container);
+    }
+    
+    // Activate vignette and scanlines
+    setTimeout(() => {
+        const vignette = document.getElementById('horror-vignette');
+        const scanlines = document.getElementById('horror-scanlines');
+        if (vignette) vignette.style.opacity = '1';
+        if (scanlines) scanlines.style.opacity = '0.3';
+    }, 1000);
+    
+    // Add horror cursor
+    document.body.classList.add('cursor-horror');
+    
+    // Start random horror events
+    startHorrorNotifications();
+    startHorrorDemon();
+    startBloodDrips();
+    startRandomGlitches();
+    startRandomJumpscares();
+}
+
+function stopHorrorEffects() {
+    if (!horrorActive) return;
+    horrorActive = false;
+    console.log("👻 Horror effects deactivated");
+    
+    // Clear all intervals and timeouts
+    horrorIntervals.forEach(i => clearInterval(i));
+    horrorTimeouts.forEach(t => clearTimeout(t));
+    horrorIntervals = [];
+    horrorTimeouts = [];
+    
+    // Remove horror elements
+    const container = document.getElementById('horror-overlay-container');
+    if (container) container.remove();
+    
+    // Remove horror cursor
+    document.body.classList.remove('cursor-horror');
+    
+    // Remove any glitch classes
+    document.querySelectorAll('.horror-glitch-text, .horror-flicker').forEach(el => {
+        el.classList.remove('horror-glitch-text', 'horror-flicker');
+    });
+}
+
+function startHorrorNotifications() {
+    // Random creepy notifications
+    const interval = setInterval(() => {
+        if (!horrorActive) return;
+        
+        if (Math.random() > 0.6) {
+            showHorrorNotification(horrorMessages[Math.floor(Math.random() * horrorMessages.length)]);
+        }
+    }, 15000 + Math.random() * 20000); // Every 15-35 seconds
+    
+    horrorIntervals.push(interval);
+    
+    // First notification after 10 seconds
+    const timeout = setTimeout(() => {
+        if (horrorActive) {
+            showHorrorNotification(horrorMessages[Math.floor(Math.random() * horrorMessages.length)]);
+        }
+    }, 10000);
+    horrorTimeouts.push(timeout);
+}
+
+function showHorrorNotification(message) {
+    const notif = document.createElement('div');
+    notif.className = 'horror-notification';
+    notif.textContent = message;
+    notif.style.top = (20 + Math.random() * 60) + '%';
+    
+    const container = document.getElementById('horror-overlay-container');
+    if (container) {
+        container.appendChild(notif);
+        
+        // Slide in
+        setTimeout(() => notif.classList.add('show'), 100);
+        
+        // Slide out and remove
+        setTimeout(() => {
+            notif.classList.remove('show');
+            setTimeout(() => notif.remove(), 500);
+        }, 4000);
+    }
+}
+
+function startHorrorDemon() {
+    const demon = document.getElementById('horror-demon');
+    if (!demon) return;
+    
+    const interval = setInterval(() => {
+        if (!horrorActive) return;
+        
+        if (Math.random() > 0.7) {
+            // Position randomly
+            demon.style.left = (Math.random() * 80 + 10) + '%';
+            demon.style.top = (Math.random() * 80 + 10) + '%';
+            
+            // Fade in
+            demon.style.opacity = '0.6';
+            
+            // Fade out after random time
+            const timeout = setTimeout(() => {
+                demon.style.opacity = '0';
+            }, 2000 + Math.random() * 3000);
+            horrorTimeouts.push(timeout);
+        }
+    }, 20000 + Math.random() * 30000); // Every 20-50 seconds
+    
+    horrorIntervals.push(interval);
+}
+
+function startBloodDrips() {
+    const interval = setInterval(() => {
+        if (!horrorActive) return;
+        
+        if (Math.random() > 0.5) {
+            createBloodDrip();
+        }
+    }, 10000 + Math.random() * 15000); // Every 10-25 seconds
+    
+    horrorIntervals.push(interval);
+}
+
+function createBloodDrip() {
+    const drip = document.createElement('div');
+    drip.className = 'horror-blood-drip';
+    drip.style.left = (Math.random() * 100) + '%';
+    
+    const container = document.getElementById('horror-overlay-container');
+    if (container) {
+        container.appendChild(drip);
+        setTimeout(() => drip.remove(), 5000);
+    }
+}
+
+function startRandomGlitches() {
+    const interval = setInterval(() => {
+        if (!horrorActive) return;
+        
+        if (Math.random() > 0.7) {
+            // Glitch the title or question text
+            const targets = document.querySelectorAll('.title, .question-text, h1, h2');
+            const target = targets[Math.floor(Math.random() * targets.length)];
+            
+            if (target) {
+                target.classList.add('horror-glitch-text');
+                const timeout = setTimeout(() => {
+                    target.classList.remove('horror-glitch-text');
+                }, 500 + Math.random() * 1000);
+                horrorTimeouts.push(timeout);
+            }
+            
+            // Also flicker the screen occasionally
+            if (Math.random() > 0.8) {
+                document.body.classList.add('horror-flicker');
+                const timeout2 = setTimeout(() => {
+                    document.body.classList.remove('horror-flicker');
+                }, 200);
+                horrorTimeouts.push(timeout2);
+            }
+        }
+    }, 8000 + Math.random() * 12000); // Every 8-20 seconds
+    
+    horrorIntervals.push(interval);
+}
+
+function startRandomJumpscares() {
+    // Very rare jumpscares (only on wrong answers in horror mode)
+    // This will be triggered from the answer handler
+}
+
+function triggerHorrorJumpscare() {
+    if (!horrorActive) return;
+    
+    const jumpscare = document.getElementById('horror-jumpscare');
+    if (jumpscare) {
+        // Random scary emoji
+        const scaryEmojis = ['👹', '👺', '💀', '👻', '🎃', '😈'];
+        jumpscare.querySelector('span').textContent = scaryEmojis[Math.floor(Math.random() * scaryEmojis.length)];
+        
+        jumpscare.classList.add('active');
+        
+        // Play scare sound if available
+        playSfx('horror_scare');
+        
+        setTimeout(() => {
+            jumpscare.classList.remove('active');
+        }, 500);
+    }
 }
 
 function updateThemeUI() {
@@ -1375,7 +1773,8 @@ function updateParticlesColor() {
         ocean: '#00b4d8',
         sakura: '#ffb7c5',
         midnight: '#e94560',
-        clean: '#4361ee'
+        clean: '#4361ee',
+        horror: '#8B0000'
     };
     
     const color = themeColors[selectedTheme] || '#0ff';
@@ -2058,6 +2457,11 @@ function handleSoloAnswer(idx) {
         
         playSfx('wrong');
         
+        // Horror theme: trigger jumpscare on wrong answer (30% chance)
+        if (selectedTheme === 'horror' && Math.random() > 0.7) {
+            triggerHorrorJumpscare();
+        }
+        
         // Update score display
         const scoreEl = document.getElementById('soloScore');
         if (scoreEl) {
@@ -2489,6 +2893,9 @@ function connectWebSocket(code, playerName, isCreating, subjects, gm = 'ffa', is
     console.log('- aiQuestions:', aiQuestions);
     console.log('- aiQuestions length:', aiQuestions ? aiQuestions.length : 0);
     
+    // Get current avatar config to send to server
+    const avatarConfig = currentAvatar || generateRandomAvatar();
+    
     ws = new WebSocket(getWebSocketUrl(code));
     ws.onopen = () => {
         if (isCreating) {
@@ -2506,8 +2913,8 @@ function connectWebSocket(code, playerName, isCreating, subjects, gm = 'ffa', is
             }
             console.log('Sending createData:', JSON.stringify(createData).substring(0, 500));
             ws.send(JSON.stringify(createData));
-            setTimeout(() => ws.send(JSON.stringify({ action: 'join', playerName: playerName })), 100);
-        } else ws.send(JSON.stringify({ action: 'join', playerName: playerName, team: team }));
+            setTimeout(() => ws.send(JSON.stringify({ action: 'join', playerName: playerName, avatar: avatarConfig })), 100);
+        } else ws.send(JSON.stringify({ action: 'join', playerName: playerName, team: team, avatar: avatarConfig }));
     };
     ws.onmessage = (event) => handleMessage(JSON.parse(event.data));
     ws.onerror = () => alert(t('connectionError'));
@@ -2524,7 +2931,7 @@ function handleMessage(msg) {
             break;
         case 'players': 
             updatePlayers(msg.data); 
-            // Store players for game screen
+            // Store players with their avatars for game screen
             window.currentGamePlayers = msg.data.players;
             break;
         case 'gameStarting': 
@@ -2569,12 +2976,17 @@ function updatePlayers(data) {
         let teamBadge = '';
         if (data.gameMode === 'team' && player.team) teamBadge = `<span class="team-badge team-${player.team}">${t('team' + player.team.charAt(0).toUpperCase() + player.team.slice(1))}</span>`;
         
-        // Use avatar - check if this is the current player
-        const isCurrentPlayer = player.name === currentPlayerName;
-        const avatar = createAvatarHTML(player.name, isCurrentPlayer);
+        // Use avatar from server if available, otherwise generate from name
+        let avatarUrl;
+        if (player.avatar) {
+            avatarUrl = generateAvatarUrl(player.avatar);
+        } else {
+            avatarUrl = generateAvatarUrlFromName(player.name);
+        }
+        
         div.innerHTML = `
             <div class="player-info">
-                ${avatar}
+                <img src="${avatarUrl}" alt="${player.name}" class="player-avatar" style="width: 40px; height: 40px; border-radius: 50%; margin-right: 10px;">
                 <span class="player-name">${player.name}${teamBadge}</span>
             </div>
             ${player.isHost ? `<span class="host-badge">${t('host')}</span>` : ''}
@@ -2609,11 +3021,35 @@ function startGame() {
 let currentMaxTime = 10; // Store max time for circular timer
 
 function showQuestion(data) {
-    // Ensure we're on the game screen
-    showScreen('gameScreen');
+    console.log('showQuestion called with:', data);
+    
+    // Ensure we're on the game screen - immediate transition for game
+    const currentScreen = document.querySelector('.screen.active');
+    const gameScreen = document.getElementById('gameScreen');
+    
+    if (currentScreen) {
+        currentScreen.classList.remove('active', 'exiting');
+    }
+    if (gameScreen) {
+        gameScreen.classList.add('active');
+    }
     
     hasBuzzed = false; canAnswer = false;
-    document.getElementById('questionText').textContent = data.q;
+    
+    // Update question text
+    const questionTextEl = document.getElementById('questionText');
+    if (questionTextEl) {
+        questionTextEl.textContent = data.q;
+        console.log('Question text set to:', data.q);
+    } else {
+        console.error('questionText element not found!');
+    }
+    
+    // Update question number
+    const questionNumberEl = document.getElementById('questionNumber');
+    if (questionNumberEl && data.questionInRound) {
+        questionNumberEl.textContent = `QUESTION #${data.questionInRound}`;
+    }
     
     // Handle question image (for flag quiz etc.)
     const questionImageEl = document.getElementById('questionImage');
@@ -2648,12 +3084,12 @@ function showQuestion(data) {
     if (questionBadge && data.questionInRound) {
         const questionValue = questionBadge.querySelector('.question-value');
         if (questionValue) {
-            questionValue.textContent = `${data.questionInRound}/${data.questionsPerRound}`;
+            questionValue.textContent = `${data.questionInRound}/${data.questionsPerRound || 5}`;
         }
     }
 
-    let timeLeft = data.time;
-    currentMaxTime = data.time;
+    let timeLeft = data.time || 10;
+    currentMaxTime = data.time || 10;
     const timerEl = document.getElementById('timer');
     
     // Use circular timer
@@ -2672,21 +3108,33 @@ function showQuestion(data) {
         }
     }, 1000);
 
+    // Setup buzzer
     const buzzer = document.getElementById('buzzer');
-    if (buzzer) { buzzer.disabled = false; buzzer.classList.remove('buzzed'); buzzer.textContent = t('buzz'); }
+    if (buzzer) { 
+        buzzer.disabled = false; 
+        buzzer.classList.remove('buzzed'); 
+        buzzer.textContent = t('buzz');
+        buzzer.style.display = 'block';
+    }
 
+    // Setup options
     const optionsBox = document.getElementById('optionsBox');
-    if (optionsBox) {
+    if (optionsBox && data.options) {
         optionsBox.innerHTML = '';
+        optionsBox.style.display = 'grid';
         data.options.forEach((option, idx) => {
             const div = document.createElement('div'); 
-            div.className = 'option visible'; // Make visible immediately
+            div.className = 'option'; 
             div.textContent = option; 
             div.onclick = () => answerQuestion(idx);
             div.style.animationDelay = (idx * 0.1) + 's';
             optionsBox.appendChild(div);
         });
+        console.log('Options rendered:', data.options.length);
+    } else {
+        console.error('optionsBox element not found or no options!', optionsBox, data.options);
     }
+    
     hideMessage();
 }
 
@@ -2774,6 +3222,12 @@ function showResult(data) {
             createConfetti(30); 
         } else { 
             playSfx('wrong');
+            
+            // Horror theme: trigger jumpscare on wrong answer (30% chance)
+            if (selectedTheme === 'horror' && Math.random() > 0.7) {
+                triggerHorrorJumpscare();
+            }
+            
             showPointsPopup(pointsEarned < 0 ? `${pointsEarned}` : '✗', false);
             showFeedbackFlash(false);
             shakeScreen(); 
@@ -2846,15 +3300,22 @@ function renderPlayerCards(players, scores = {}) {
     const currentPlayerName = document.getElementById('createName')?.value || 
                               document.getElementById('joinName')?.value || '';
     
+    // Get stored game players for avatar info
+    const gamePlayers = window.currentGamePlayers || [];
+    
+    const playerCount = players.length;
+    
     players.forEach((player, idx) => {
         const name = typeof player === 'string' ? player : player.name;
         const score = scores[name] || 0;
         const colorClass = playerCardColors[idx % playerCardColors.length];
-        const isCurrentPlayer = name === currentPlayerName;
         
-        // Generate avatar URL
+        // Get avatar from server data or fallback
         let avatarUrl;
-        if (isCurrentPlayer && currentAvatar) {
+        const serverPlayer = gamePlayers.find(p => p.name === name);
+        if (serverPlayer && serverPlayer.avatar) {
+            avatarUrl = generateAvatarUrl(serverPlayer.avatar);
+        } else if (name === currentPlayerName && currentAvatar) {
             avatarUrl = generateAvatarUrl(currentAvatar);
         } else {
             avatarUrl = generateAvatarUrlFromName(name);
@@ -2871,11 +3332,31 @@ function renderPlayerCards(players, scores = {}) {
             <div class="player-card-score">${score} Pts</div>
         `;
         
-        // Distribute players: first 2 on left, next 2 on right
-        if (idx < 2) {
-            leftColumn.appendChild(card);
+        // Smart distribution based on player count
+        // 2 players: 1 left, 1 right
+        // 3 players: 2 left, 1 right (or 1 left, 2 right)
+        // 4 players: 2 left, 2 right
+        if (playerCount === 2) {
+            // 1 on each side
+            if (idx === 0) {
+                leftColumn.appendChild(card);
+            } else {
+                rightColumn.appendChild(card);
+            }
+        } else if (playerCount === 3) {
+            // 1 left, 2 right OR 2 left, 1 right
+            if (idx === 0) {
+                leftColumn.appendChild(card);
+            } else {
+                rightColumn.appendChild(card);
+            }
         } else {
-            rightColumn.appendChild(card);
+            // 4 players: 2 on each side
+            if (idx < 2) {
+                leftColumn.appendChild(card);
+            } else {
+                rightColumn.appendChild(card);
+            }
         }
     });
 }
@@ -2963,6 +3444,20 @@ function closePodiumAndShowMultiGameOver() {
     const currentPlayerName = document.getElementById('createName')?.value || 
                               document.getElementById('joinName')?.value || '';
     
+    // Get player avatars from stored game players
+    const gamePlayers = window.currentGamePlayers || [];
+    const getPlayerAvatar = (playerName) => {
+        const player = gamePlayers.find(p => p.name === playerName);
+        if (player && player.avatar) {
+            return generateAvatarUrl(player.avatar);
+        }
+        // Fallback: check if it's current player
+        if (playerName === currentPlayerName && currentAvatar) {
+            return generateAvatarUrl(currentAvatar);
+        }
+        return generateAvatarUrlFromName(playerName);
+    };
+    
     // Render podium with avatars
     const podiumContainer = document.getElementById('podiumClubhouse');
     if (podiumContainer && sortedPlayers.length >= 1) {
@@ -2974,9 +3469,7 @@ function closePodiumAndShowMultiGameOver() {
         const medals = ['🥇', '🥈', '🥉'];
         
         podiumPlayers.forEach((player, idx) => {
-            const isCurrentPlayer = player.name === currentPlayerName;
-            const avatarUrl = isCurrentPlayer && currentAvatar ? 
-                generateAvatarUrl(currentAvatar) : generateAvatarUrlFromName(player.name);
+            const avatarUrl = getPlayerAvatar(player.name);
             
             podiumHTML += `
                 <div class="podium-place-clubhouse ${positions[idx]}">
@@ -2997,9 +3490,7 @@ function closePodiumAndShowMultiGameOver() {
     const leaderboardList = document.getElementById('leaderboardList');
     if (leaderboardList) {
         leaderboardList.innerHTML = sortedPlayers.map((player, idx) => {
-            const isCurrentPlayer = player.name === currentPlayerName;
-            const avatarUrl = isCurrentPlayer && currentAvatar ? 
-                generateAvatarUrl(currentAvatar) : generateAvatarUrlFromName(player.name);
+            const avatarUrl = getPlayerAvatar(player.name);
             
             return `
                 <div class="leaderboard-item">
@@ -3389,5 +3880,3 @@ showHome = function() {
     cleanupVoiceChat();
     originalShowHome();
 };
-
-
