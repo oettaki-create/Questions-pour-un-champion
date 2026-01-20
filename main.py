@@ -8,8 +8,8 @@ from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional, List
 
 # === SCORING CONFIGURATION ===
-WRONG_ANSWER_PENALTY = 5      # Points lost for wrong answer
-TIMEOUT_PENALTY = 5           # Points lost for timeout
+WRONG_ANSWER_PENALTY = 50     # Points lost for wrong answer
+TIMEOUT_PENALTY = 50          # Points lost for timeout
 MIN_CORRECT_POINTS = 10       # Minimum points for correct answer (slow response)
 MAX_CORRECT_POINTS = 100      # Maximum points for correct answer (instant response)
 
@@ -643,7 +643,8 @@ async def websocket_endpoint(ws: WebSocket, code: str):
 
                 lang = room.get("language", "en")
                 name = msg.get("playerName", "").strip()
-                selected_team = msg.get("team")  # NEW: Get team selection from player
+                selected_team = msg.get("team")
+                avatar_config = msg.get("avatar")  # Get avatar from client
                 
                 # Check 4-player maximum limit
                 MAX_PLAYERS = 4
@@ -684,7 +685,8 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                     "score": 0,
                     "joined_at": time.time(),
                     "active": True,
-                    "team": team
+                    "team": team,
+                    "avatar": avatar_config  # Store avatar
                 }
                 
                 if room["host"] is None:
@@ -718,7 +720,8 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                             "name": p["name"], 
                             "score": p["score"],
                             "isHost": uid == room["host"],
-                            "team": p.get("team")
+                            "team": p.get("team"),
+                            "avatar": p.get("avatar")  # Include avatar in broadcast
                         }
                         for uid, p in room["players"].items()
                     ],
@@ -922,6 +925,7 @@ async def websocket_endpoint(ws: WebSocket, code: str):
             player_name = room["players"][user_id]["name"]
             was_host = (user_id == room["host"])
             lang = room.get("language", "en")
+            game_state = room.get("state", "waiting")
             room["players"].pop(user_id)
             
             if was_host and room["players"]:
@@ -932,24 +936,61 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                     "message": get_text(lang, "new_host", host=room["players"][new_host]["name"])
                 })
             
+            # Broadcast updated player list with avatars
+            MAX_PLAYERS = 4
+            can_start = False
+            if room["game_mode"] == "team":
+                red_count = sum(1 for p in room["players"].values() if p.get("team") == "red")
+                blue_count = sum(1 for p in room["players"].values() if p.get("team") == "blue")
+                can_start = len(room["players"]) == 4 and red_count == 2 and blue_count == 2
+            else:
+                can_start = len(room["players"]) >= 2 and len(room["players"]) <= MAX_PLAYERS
+            
             await broadcast(code, "playerLeft", {
                 "player": player_name,
                 "remaining": len(room["players"]),
                 "message": get_text(lang, "player_left", player=player_name)
             })
             
+            # Broadcast updated players list
+            await broadcast(code, "players", {
+                "players": [
+                    {
+                        "name": p["name"], 
+                        "score": p["score"],
+                        "isHost": uid == room["host"],
+                        "team": p.get("team"),
+                        "avatar": p.get("avatar")
+                    }
+                    for uid, p in room["players"].items()
+                ],
+                "count": len(room["players"]),
+                "maxPlayers": MAX_PLAYERS,
+                "canStart": can_start,
+                "gameMode": room["game_mode"],
+                "teamCounts": {
+                    "red": sum(1 for p in room["players"].values() if p.get("team") == "red"),
+                    "blue": sum(1 for p in room["players"].values() if p.get("team") == "blue")
+                } if room["game_mode"] == "team" else None
+            })
+            
             # Notify lobby about updated player count
             if room.get("is_public"):
                 await broadcast_public_rooms()
             
-            # Check based on game mode
-            min_players = 4 if room.get("game_mode") == "team" else 2
-            if len(room["players"]) < min_players:
-                await broadcast(code, "gameOver", {
-                    "reason": get_text(lang, "not_enough_players"),
-                    "finalScores": {p["name"]: p["score"] for p in room["players"].values()},
-                    "teamScores": room.get("teams") if room.get("game_mode") == "team" else None
-                })
+            # Only end game if game is in progress (not in lobby/waiting)
+            if game_state in ["question", "buzzed", "answered"]:
+                min_players = 4 if room.get("game_mode") == "team" else 2
+                if len(room["players"]) < min_players:
+                    await broadcast(code, "gameOver", {
+                        "reason": get_text(lang, "not_enough_players"),
+                        "winner": None,
+                        "finalScores": {p["name"]: p["score"] for p in room["players"].values()},
+                        "teamScores": room.get("teams") if room.get("game_mode") == "team" else None
+                    })
+                    await cleanup_room(code)
+            elif len(room["players"]) == 0:
+                # Clean up empty rooms
                 await cleanup_room(code)
 
 # === GAME LOGIC ===
