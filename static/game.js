@@ -194,7 +194,7 @@ async function saveAvatarToSupabase() {
 }
 
 // Update player stats after game
-async function updatePlayerStats(score, won, playersCount) {
+async function updatePlayerStats(score, won, playersCount, position = null) {
     if (!currentPlayer) return;
     
     try {
@@ -219,9 +219,18 @@ async function updatePlayerStats(score, won, playersCount) {
             player_id: currentPlayer.id,
             room_code: currentRoomCode || 'solo',
             score: score,
-            position: won ? 1 : null,
+            position: position || (won ? 1 : null),
             players_count: playersCount
         });
+        
+        // Update local currentPlayer object
+        currentPlayer.games_played = updates.games_played;
+        currentPlayer.total_score = updates.total_score;
+        if (won) currentPlayer.games_won = updates.games_won;
+        if (score > currentPlayer.highest_score) currentPlayer.highest_score = score;
+        
+        // Refresh auth UI to show updated stats
+        updateAuthUI();
         
     } catch (error) {
         console.error('Stats update error:', error);
@@ -2566,7 +2575,10 @@ function showSoloGameOver() {
     
     // Save stats to Supabase if logged in
     if (currentPlayer) {
-        updatePlayerStats(soloScore, true, 1);
+        // In solo mode, consider it a "win" if score is positive
+        const didWin = soloScore > 0;
+        updatePlayerStats(soloScore, didWin, 1);
+        console.log(`[Solo] Stats saved: Score=${soloScore}, Won=${didWin}`);
     }
     
     // Show podium celebration for solo mode
@@ -3529,6 +3541,25 @@ function closePodiumAndShowMultiGameOver() {
     const currentPlayerName = document.getElementById('createName')?.value || 
                               document.getElementById('joinName')?.value || '';
     
+    // ========================================
+    // SAVE STATS TO SUPABASE FOR MULTIPLAYER
+    // ========================================
+    if (currentPlayer && currentPlayerName) {
+        // Find current player's score and position
+        const playerIndex = sortedPlayers.findIndex(p => p.name === currentPlayerName);
+        if (playerIndex !== -1) {
+            const myScore = sortedPlayers[playerIndex].score;
+            const myPosition = playerIndex + 1;
+            const didWin = myPosition === 1;
+            const playersCount = sortedPlayers.length;
+            
+            // Update stats in Supabase (with position)
+            updatePlayerStats(myScore, didWin, playersCount, myPosition);
+            
+            console.log(`[Multiplayer] Stats saved: Score=${myScore}, Position=${myPosition}/${playersCount}, Won=${didWin}`);
+        }
+    }
+    
     // Get player avatars from stored game players
     const gamePlayers = window.currentGamePlayers || [];
     const getPlayerAvatar = (playerName) => {
@@ -3965,4 +3996,3 @@ showHome = function() {
     cleanupVoiceChat();
     originalShowHome();
 };
-
