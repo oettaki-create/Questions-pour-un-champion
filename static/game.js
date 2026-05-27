@@ -21,10 +21,13 @@ async function supabaseRequest(endpoint, method = 'GET', body = null) {
         headers: {
             'apikey': SUPABASE_ANON_KEY,
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-            'Content-Type': 'application/json',
-            'Prefer': method === 'POST' ? 'return=representation' : undefined
+            'Content-Type': 'application/json'
         }
     };
+    // Only add Prefer header for POST requests (needed to get inserted row back)
+    if (method === 'POST') {
+        options.headers['Prefer'] = 'return=representation';
+    }
     if (body) options.body = JSON.stringify(body);
     
     try {
@@ -294,13 +297,23 @@ function updateAuthUI() {
 }
 
 // Show auth tab (login/register)
-function showAuthTab(tab) {
+function showAuthTab(tab, e) {
     const loginForm = document.getElementById('loginForm');
     const registerForm = document.getElementById('registerForm');
     const tabs = document.querySelectorAll('.auth-tab');
     
     tabs.forEach(t => t.classList.remove('active'));
-    event.target.classList.add('active');
+    if (e && e.target) {
+        e.target.classList.add('active');
+    } else {
+        // Fallback: activate the correct tab by content match
+        tabs.forEach(t => {
+            if ((tab === 'login' && t.textContent.trim().toLowerCase().includes('login')) ||
+                (tab === 'register' && t.textContent.trim().toLowerCase().includes('register'))) {
+                t.classList.add('active');
+            }
+        });
+    }
     
     if (tab === 'login') {
         if (loginForm) loginForm.style.display = 'flex';
@@ -340,6 +353,29 @@ async function handleLogin() {
 }
 
 // Handle register
+// Password strength indicator for registration
+function updatePasswordStrength(password) {
+    const bar = document.getElementById('passwordStrengthBar');
+    if (!bar) return;
+    
+    bar.className = 'password-strength-bar';
+    if (!password || password.length === 0) {
+        bar.style.width = '0%';
+        return;
+    }
+    
+    let strength = 0;
+    if (password.length >= 4) strength++;
+    if (password.length >= 8) strength++;
+    if (/[A-Z]/.test(password) && /[a-z]/.test(password)) strength++;
+    if (/[0-9]/.test(password)) strength++;
+    if (/[^A-Za-z0-9]/.test(password)) strength++;
+    
+    if (strength <= 2) bar.classList.add('weak');
+    else if (strength <= 3) bar.classList.add('medium');
+    else bar.classList.add('strong');
+}
+
 async function handleRegister() {
     const username = document.getElementById('registerUsername')?.value.trim();
     const password = document.getElementById('registerPassword')?.value;
@@ -2465,10 +2501,10 @@ function showNextSoloQuestion() {
     hideSoloMessage();
 }
 
-// Scoring constants
-const WRONG_ANSWER_PENALTY = 5;  // Points lost for wrong answer
-const MIN_CORRECT_POINTS = 10;   // Minimum points for correct answer
-const MAX_CORRECT_POINTS = 100;  // Maximum points for correct answer (instant answer)
+// Scoring constants (must match server-side values in main.py)
+const WRONG_ANSWER_PENALTY = 50;  // Points lost for wrong answer
+const MIN_CORRECT_POINTS = 10;    // Minimum points for correct answer
+const MAX_CORRECT_POINTS = 100;   // Maximum points for correct answer (instant answer)
 
 // Calculate score based on time left
 function calculateTimeScore(timeLeft, maxTime) {
@@ -2505,8 +2541,8 @@ function handleSoloAnswer(idx) {
         showFeedbackFlash(true);
         createConfetti(30);
     } else { 
-        // Penalty for wrong answer
-        soloScore = Math.max(0, soloScore - WRONG_ANSWER_PENALTY);
+        // Penalty for wrong answer - allow negative scores (matches multiplayer)
+        soloScore -= WRONG_ANSWER_PENALTY;
         
         playSfx('wrong');
         
@@ -2544,8 +2580,8 @@ function handleSoloAnswer(idx) {
 }
 
 function handleSoloTimeout() {
-    // Penalty for timeout (same as wrong answer)
-    soloScore = Math.max(0, soloScore - WRONG_ANSWER_PENALTY);
+    // Penalty for timeout - allow negative scores (matches multiplayer)
+    soloScore -= WRONG_ANSWER_PENALTY;
     
     playSfx('wrong');
     
@@ -3091,6 +3127,42 @@ function updateLobbyPlayerCount() {
     } else if (waitingMsg) {
         waitingMsg.textContent = t('waitingForPlayers');
     }
+}
+
+function copyRoomCode() {
+    const codeEl = document.getElementById('roomCode');
+    const btn = document.getElementById('copyCodeBtn');
+    const icon = document.getElementById('copyIcon');
+    if (!codeEl) return;
+    
+    const code = codeEl.textContent.trim();
+    if (!code || code === '----') return;
+    
+    navigator.clipboard.writeText(code).then(() => {
+        // Visual feedback
+        if (icon) icon.textContent = '✅';
+        if (btn) btn.classList.add('copied');
+        setTimeout(() => {
+            if (icon) icon.textContent = '📋';
+            if (btn) btn.classList.remove('copied');
+        }, 2000);
+    }).catch(() => {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = code;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (icon) icon.textContent = '✅';
+        if (btn) btn.classList.add('copied');
+        setTimeout(() => {
+            if (icon) icon.textContent = '📋';
+            if (btn) btn.classList.remove('copied');
+        }, 2000);
+    });
 }
 
 function startGame() {
