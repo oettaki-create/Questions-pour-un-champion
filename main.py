@@ -21,6 +21,106 @@ def calculate_time_score(time_left: float, max_time: float) -> int:
     score = int(MIN_CORRECT_POINTS + (MAX_CORRECT_POINTS - MIN_CORRECT_POINTS) * time_ratio)
     return score
 
+# ============================================
+# ADAPTIVE DIFFICULTY ENGINE
+# ============================================
+
+# Difficulty levels and their modifiers
+DIFFICULTY_LEVELS = {
+    "easy":   {"timer_bonus": 5, "score_multiplier": 0.8, "target_difficulty": 1},
+    "medium": {"timer_bonus": 0, "score_multiplier": 1.0, "target_difficulty": 2},
+    "hard":   {"timer_bonus": -3, "score_multiplier": 1.5, "target_difficulty": 3},
+}
+
+def create_adaptive_state():
+    """Create fresh adaptive difficulty state"""
+    return {
+        "history": [],          # rolling window of results (1=correct, 0=wrong)
+        "level": "medium",      # current difficulty level
+        "streak": 0,            # current correct streak (negative = wrong streak)
+        "questions_answered": 0,
+        "avg_response_time": 0.0,
+        "response_times": [],   # rolling window of response times
+    }
+
+def update_adaptive_state(state, correct: bool, response_time: float):
+    """Update adaptive state after an answer"""
+    WINDOW = 5  # rolling window size
+    
+    state["history"].append(1 if correct else 0)
+    if len(state["history"]) > WINDOW:
+        state["history"] = state["history"][-WINDOW:]
+    
+    state["response_times"].append(response_time)
+    if len(state["response_times"]) > WINDOW:
+        state["response_times"] = state["response_times"][-WINDOW:]
+    
+    state["avg_response_time"] = sum(state["response_times"]) / len(state["response_times"])
+    state["questions_answered"] += 1
+    
+    # Update streak
+    if correct:
+        state["streak"] = max(0, state["streak"]) + 1
+    else:
+        state["streak"] = min(0, state["streak"]) - 1
+    
+    # Calculate performance ratio from rolling window
+    if len(state["history"]) >= 3:  # Need at least 3 answers before adapting
+        ratio = sum(state["history"]) / len(state["history"])
+        
+        current = state["level"]
+        if ratio > 0.8 and state["streak"] >= 3:
+            # Doing great — increase difficulty
+            if current == "easy": state["level"] = "medium"
+            elif current == "medium": state["level"] = "hard"
+        elif ratio < 0.4 or state["streak"] <= -2:
+            # Struggling — decrease difficulty
+            if current == "hard": state["level"] = "medium"
+            elif current == "medium": state["level"] = "easy"
+    
+    return state
+
+def get_adaptive_modifiers(state):
+    """Get timer and score modifiers for current difficulty level"""
+    return DIFFICULTY_LEVELS.get(state["level"], DIFFICULTY_LEVELS["medium"])
+
+def get_room_collective_state(room):
+    """Compute collective adaptive state for multiplayer rooms"""
+    if "adaptive_room" not in room:
+        room["adaptive_room"] = create_adaptive_state()
+    return room["adaptive_room"]
+
+def update_room_collective(room, num_correct: int, num_active: int, avg_response_time: float):
+    """Update room-level adaptive state based on collective performance"""
+    state = get_room_collective_state(room)
+    # Treat the room performance as a single "player"
+    room_correct = num_correct / max(1, num_active) > 0.5  # majority got it right
+    update_adaptive_state(state, room_correct, avg_response_time)
+    return state
+
+def select_question_by_difficulty(questions, target_difficulty):
+    """Select a question matching the target difficulty, with fallback"""
+    # Separate questions by difficulty tag
+    tagged = [q for q in questions if "difficulty" in q]
+    untagged = [q for q in questions if "difficulty" not in q]
+    
+    if not tagged:
+        # No difficulty tags — pick randomly from all
+        return random.choice(questions) if questions else None
+    
+    # Try exact match first
+    exact = [q for q in tagged if q["difficulty"] == target_difficulty]
+    if exact:
+        return random.choice(exact)
+    
+    # Try adjacent difficulty
+    adjacent = [q for q in tagged if abs(q["difficulty"] - target_difficulty) <= 1]
+    if adjacent:
+        return random.choice(adjacent)
+    
+    # Fallback to any tagged + untagged
+    return random.choice(tagged + untagged)
+
 # Load environment variables from .env file (for local development)
 try:
     from dotenv import load_dotenv
@@ -113,7 +213,11 @@ TRANSLATIONS = {
         "team_full": "That team is full (max 2 players per team)",
         "select_team": "Select Your Team:",
         "team_red": "Red Team",
-        "team_blue": "Blue Team"
+        "team_blue": "Blue Team",
+        "player_reconnected": "{player} reconnected!",
+        "reconnect_expired": "Reconnection window expired",
+        "rematch_starting": "Rematch starting! Returning to lobby...",
+        "room_full": "Room is full"
     },
     "fr": {
         "room_exists": "La salle existe déjà",
@@ -142,7 +246,11 @@ TRANSLATIONS = {
         "team_full": "Cette équipe est pleine (max 2 joueurs par équipe)",
         "select_team": "Sélectionnez votre équipe:",
         "team_red": "Équipe Rouge",
-        "team_blue": "Équipe Bleue"
+        "team_blue": "Équipe Bleue",
+        "player_reconnected": "{player} s'est reconnecté !",
+        "reconnect_expired": "Délai de reconnexion expiré",
+        "rematch_starting": "Revanche ! Retour au lobby...",
+        "room_full": "La salle est pleine"
     }
 }
 
@@ -193,11 +301,27 @@ except FileNotFoundError:
 except Exception as e:
     print(f"⚠️ Error loading image riddles: {e}")
 
+# Load picture guess questions
+try:
+    with open("picguess_questions.json", "r", encoding="utf-8") as f:
+        PICGUESS_QUESTIONS = json.load(f)
+    for lang in PICGUESS_QUESTIONS:
+        if lang not in ALL_QUESTIONS:
+            ALL_QUESTIONS[lang] = {}
+        ALL_QUESTIONS[lang]["picguess"] = PICGUESS_QUESTIONS[lang]["picguess"]
+    print(f"✅ Loaded {len(PICGUESS_QUESTIONS.get('en', {}).get('picguess', []))} picture guess questions")
+except FileNotFoundError:
+    print("⚠️ picguess_questions.json not found, picture guess disabled")
+except Exception as e:
+    print(f"⚠️ Error loading picture guess questions: {e}")
+
 # === GLOBAL STATE ===
 rooms: Dict[str, Dict] = {}
 connections: Dict[str, Dict[str, WebSocket]] = {}
 room_locks: Dict[str, asyncio.Lock] = {}
+disconnected_players: Dict[str, Dict[str, Dict]] = {}  # code -> {user_id -> {player_data, disconnected_at, match_token}}
 
+RECONNECT_WINDOW = 60  # seconds a player can reconnect after disconnect
 # === HELPERS ===
 def get_room(code: str) -> Optional[Dict]:
     return rooms.get(code)
@@ -254,9 +378,69 @@ async def cleanup_room(code: str):
     rooms.pop(code, None)
     connections.pop(code, None)
     room_locks.pop(code, None)
+    disconnected_players.pop(code, None)
     # Notify lobby if it was a public room
     if was_public:
         await broadcast_public_rooms()
+
+def purge_expired_disconnects(code: str):
+    """Remove expired disconnection entries for a room"""
+    if code not in disconnected_players:
+        return
+    now = time.time()
+    expired = [uid for uid, data in disconnected_players[code].items()
+               if now - data["disconnected_at"] > RECONNECT_WINDOW]
+    for uid in expired:
+        disconnected_players[code].pop(uid, None)
+    if not disconnected_players[code]:
+        disconnected_players.pop(code, None)
+
+async def end_game(code: str):
+    """Mark room as gameOver but keep it alive for rematch"""
+    room = get_room(code)
+    if room:
+        room["state"] = "gameOver"
+        # Schedule auto-cleanup after 5 minutes if no rematch
+        asyncio.create_task(_auto_cleanup_gameover(code))
+
+async def _auto_cleanup_gameover(code: str):
+    """Clean up a gameOver room after 5 minutes if no rematch happened"""
+    await asyncio.sleep(300)  # 5 minutes
+    room = get_room(code)
+    if room and room.get("state") == "gameOver":
+        await cleanup_room(code)
+
+def reset_room_for_rematch(code: str):
+    """Reset room state for a rematch — keeps players, resets scores and game state"""
+    room = get_room(code)
+    if not room:
+        return False
+    
+    # Reset all player scores and mark active
+    for uid, player in room["players"].items():
+        player["score"] = 0
+        player["active"] = True
+    
+    # Reset team scores if team mode
+    if room["teams"]:
+        for team_name in room["teams"]:
+            room["teams"][team_name]["score"] = 0
+            room["teams"][team_name]["active"] = True
+    
+    # Reset game state
+    room["state"] = "waiting"
+    room["current_q"] = None
+    room["timer"] = 0
+    room["buzzed"] = None
+    room["answered"] = False
+    room["available"] = []
+    room["current_round"] = 1
+    room["questions_in_round"] = 0
+    
+    # Clear disconnected players for this room
+    disconnected_players.pop(code, None)
+    
+    return True
 
 async def timer_task(code: str):
     room = get_room(code)
@@ -320,7 +504,7 @@ async def eliminate_lowest_player(code: str):
             "winner": winner["name"] if winner else None,
             "finalScores": {p["name"]: p["score"] for p in room["players"].values()}
         })
-        await cleanup_room(code)
+        await end_game(code)
         return True  # Signal that game ended
     
     # Find player with lowest score
@@ -350,7 +534,7 @@ async def eliminate_lowest_player(code: str):
             "winner": winner["name"],
             "finalScores": {p["name"]: p["score"] for p in room["players"].values()}
         })
-        await cleanup_room(code)
+        await end_game(code)
         return True  # Signal that game ended
     
     return False  # Game continues
@@ -381,7 +565,7 @@ async def eliminate_lowest_team(code: str):
             "finalScores": {p["name"]: p["score"] for p in room["players"].values()},
             "teamScores": teams
         })
-        await cleanup_room(code)
+        await end_game(code)
         return True
     
     # Find team with lowest score
@@ -415,7 +599,7 @@ async def eliminate_lowest_team(code: str):
             "finalScores": {p["name"]: p["score"] for p in room["players"].values()},
             "teamScores": teams
         })
-        await cleanup_room(code)
+        await end_game(code)
         return True
     
     return False
@@ -440,7 +624,7 @@ async def start_next_round(code: str):
                 "finalScores": {p["name"]: p["score"] for p in room["players"].values()},
                 "teamScores": room["teams"]
             })
-            await cleanup_room(code)
+            await end_game(code)
             return
     else:
         active_players = {uid: p for uid, p in room["players"].items() if p.get("active", True)}
@@ -451,7 +635,7 @@ async def start_next_round(code: str):
                 "winner": winner["name"] if winner else None,
                 "finalScores": {p["name"]: p["score"] for p in room["players"].values()}
             })
-            await cleanup_room(code)
+            await end_game(code)
             return
     
     # Increment round
@@ -480,7 +664,7 @@ async def start_next_round(code: str):
                 "winner": winner["name"] if winner else None,
                 "finalScores": {p["name"]: p["score"] for p in room["players"].values()}
             })
-        await cleanup_room(code)
+        await end_game(code)
         return
     
     # Show round transition
@@ -500,7 +684,11 @@ async def start_next_round(code: str):
 
 # === ROUTES ===
 @app.get("/")
-async def index(request: Request):
+async def landing(request: Request):
+    return templates.TemplateResponse("landing.html", {"request": request})
+
+@app.get("/game")
+async def game(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/api/questions")
@@ -566,10 +754,12 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                 game_mode = msg.get("gameMode", "ffa")
                 is_public = msg.get("isPublic", False)  # NEW: Public room option
                 ai_questions = msg.get("aiQuestions", None)  # NEW: AI-generated questions
+                quiz_type = msg.get("quizType", "classic")  # NEW: classic, truefalse, picguess, speed
                 
                 # Debug logging
                 print(f"Creating room {code}")
                 print(f"AI Questions received: {ai_questions is not None}")
+                print(f"Quiz type: {quiz_type}")
                 if ai_questions:
                     print(f"Number of AI questions: {len(ai_questions)}")
                 
@@ -588,11 +778,13 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                     "current_round": 1,
                     "questions_in_round": 0,
                     "max_rounds": 3,
-                    "questions_per_round": 5,
+                    "questions_per_round": 5 if quiz_type != "speed" else 10,
                     "game_mode": game_mode,
                     "is_public": is_public,  # NEW: Store public status
                     "ai_questions": ai_questions,  # NEW: Store AI questions
-                    "teams": {"red": {"score": 0, "active": True}, "blue": {"score": 0, "active": True}} if game_mode == "team" else None
+                    "quiz_type": quiz_type,  # NEW: Store quiz type
+                    "teams": {"red": {"score": 0, "active": True}, "blue": {"score": 0, "active": True}} if game_mode == "team" else None,
+                    "adaptive_room": create_adaptive_state(),  # Collective difficulty for multiplayer
                 }
                 connections[code] = {}
                 room_locks[code] = asyncio.Lock()
@@ -685,8 +877,10 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                     "score": 0,
                     "joined_at": time.time(),
                     "active": True,
+                    "connected": True,
                     "team": team,
-                    "avatar": avatar_config  # Store avatar
+                    "avatar": avatar_config,
+                    "adaptive": create_adaptive_state(),  # Per-player adaptive difficulty (solo)
                 }
                 
                 if room["host"] is None:
@@ -841,6 +1035,156 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                         except:
                             pass
 
+            elif action == "rejoin":
+                # Reconnection — player reconnects with stored credentials
+                rejoin_token = msg.get("matchToken")
+                rejoin_user_id = msg.get("userId")
+                
+                room = get_room(code)
+                if not room:
+                    await ws.send_json({"event": "error", "data": "Room no longer exists"})
+                    continue
+                
+                lang = room.get("language", "en")
+                
+                # Check if this player is in the disconnected pool
+                purge_expired_disconnects(code)
+                disc_entry = disconnected_players.get(code, {}).get(rejoin_user_id)
+                
+                if not disc_entry or disc_entry["match_token"] != rejoin_token:
+                    # Also check if player is still in room but marked disconnected
+                    player = room["players"].get(rejoin_user_id)
+                    if player and player.get("match_token") == rejoin_token and not player.get("connected", True):
+                        # Valid — restore connection
+                        player["connected"] = True
+                        connections[code][rejoin_user_id] = ws
+                        user_id = rejoin_user_id
+                        
+                        # Clean up disconnected entry
+                        if code in disconnected_players:
+                            disconnected_players[code].pop(rejoin_user_id, None)
+                        
+                        await ws.send_json({"event": "rejoined", "data": {
+                            "userId": rejoin_user_id,
+                            "matchToken": rejoin_token,
+                            "isHost": rejoin_user_id == room["host"],
+                            "team": player.get("team"),
+                            "score": player["score"],
+                            "gameState": room["state"],
+                            "language": lang,
+                            "roomCode": code
+                        }})
+                        
+                        await broadcast(code, "playerReconnected", {
+                            "player": player["name"],
+                            "message": get_text(lang, "player_reconnected", player=player["name"])
+                        }, exclude=rejoin_user_id)
+                    else:
+                        await ws.send_json({"event": "rejoinFailed", "data": get_text(lang, "reconnect_expired")})
+                    continue
+                
+                # Restore from disconnected pool
+                player_data = disc_entry["player_data"]
+                player_data["connected"] = True
+                
+                # Player should still be in room["players"] (marked disconnected)
+                if rejoin_user_id in room["players"]:
+                    room["players"][rejoin_user_id]["connected"] = True
+                else:
+                    # Edge case: was removed — re-add
+                    room["players"][rejoin_user_id] = player_data
+                
+                connections[code][rejoin_user_id] = ws
+                user_id = rejoin_user_id
+                
+                # Clean up disconnected entry
+                disconnected_players[code].pop(rejoin_user_id, None)
+                if not disconnected_players[code]:
+                    disconnected_players.pop(code, None)
+                
+                await ws.send_json({"event": "rejoined", "data": {
+                    "userId": rejoin_user_id,
+                    "matchToken": rejoin_token,
+                    "isHost": rejoin_user_id == room["host"],
+                    "team": player_data.get("team"),
+                    "score": player_data["score"],
+                    "gameState": room["state"],
+                    "language": lang,
+                    "roomCode": code
+                }})
+                
+                await broadcast(code, "playerReconnected", {
+                    "player": player_data["name"],
+                    "message": get_text(lang, "player_reconnected", player=player_data["name"])
+                }, exclude=rejoin_user_id)
+
+            elif action == "rematch":
+                # Post-game rematch — host resets room, everyone returns to lobby
+                room = get_room(code)
+                if not room:
+                    continue
+                
+                lang = room.get("language", "en")
+                msg_user_id = msg.get("userId")
+                token = msg.get("matchToken")
+                
+                player = room["players"].get(msg_user_id)
+                if not player or player["match_token"] != token:
+                    await ws.send_json({"event": "error", "data": get_text(lang, "invalid_credentials")})
+                    continue
+                
+                if msg_user_id != room["host"]:
+                    await ws.send_json({"event": "error", "data": get_text(lang, "only_host_start")})
+                    continue
+                
+                # Only allow rematch from game over state or waiting
+                if room["state"] not in ["waiting", "gameOver"]:
+                    # Also allow if game just ended (state might still be "answered")
+                    pass
+                
+                # Reset the room
+                if not reset_room_for_rematch(code):
+                    await ws.send_json({"event": "error", "data": "Could not reset room"})
+                    continue
+                
+                # Determine can_start
+                MAX_PLAYERS = 4
+                can_start = False
+                if room["game_mode"] == "team":
+                    red_count = sum(1 for p in room["players"].values() if p.get("team") == "red")
+                    blue_count = sum(1 for p in room["players"].values() if p.get("team") == "blue")
+                    can_start = len(room["players"]) == 4 and red_count == 2 and blue_count == 2
+                else:
+                    can_start = len(room["players"]) >= 2 and len(room["players"]) <= MAX_PLAYERS
+                
+                # Broadcast rematch to all players
+                await broadcast(code, "rematchStarted", {
+                    "message": get_text(lang, "rematch_starting"),
+                    "roomCode": code,
+                    "players": [
+                        {
+                            "name": p["name"],
+                            "score": p["score"],
+                            "isHost": uid == room["host"],
+                            "team": p.get("team"),
+                            "avatar": p.get("avatar")
+                        }
+                        for uid, p in room["players"].items()
+                    ],
+                    "count": len(room["players"]),
+                    "maxPlayers": MAX_PLAYERS,
+                    "canStart": can_start,
+                    "gameMode": room["game_mode"],
+                    "teamCounts": {
+                        "red": sum(1 for p in room["players"].values() if p.get("team") == "red"),
+                        "blue": sum(1 for p in room["players"].values() if p.get("team") == "blue")
+                    } if room["game_mode"] == "team" else None
+                })
+                
+                # Re-publish to lobby if public
+                if room.get("is_public"):
+                    await broadcast_public_rooms()
+
             elif action == "answer":
                 room = get_room(code)
                 if not room:
@@ -875,12 +1219,17 @@ async def websocket_endpoint(ws: WebSocket, code: str):
 
                     correct = idx == q["correct"]
                     points_earned = 0
+                    score_multiplier = room.get("score_multiplier", 1.0)
+                    
+                    # Calculate response time for adaptive tracking
+                    response_time = time.time() - room.get("question_start_time", time.time())
                     
                     if correct:
-                        # Calculate time-based score
+                        # Calculate time-based score with adaptive multiplier
                         elapsed = time.time() - room.get("question_start_time", time.time())
                         time_left = max(0, room.get("max_time", 10) - elapsed)
-                        points_earned = calculate_time_score(time_left, room.get("max_time", 10))
+                        base_points = calculate_time_score(time_left, room.get("max_time", 10))
+                        points_earned = int(base_points * score_multiplier)
                         player["score"] += points_earned
                         # Add score to team if team mode
                         if room["game_mode"] == "team" and player.get("team"):
@@ -892,6 +1241,17 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                         # Deduct from team if team mode - allow negative
                         if room["game_mode"] == "team" and player.get("team"):
                             room["teams"][player["team"]]["score"] -= WRONG_ANSWER_PENALTY
+                    
+                    # Update adaptive difficulty state
+                    # Per-player adaptive state
+                    if "adaptive" in player:
+                        update_adaptive_state(player["adaptive"], correct, response_time)
+                    
+                    # Collective room adaptive state (for multiplayer difficulty scaling)
+                    active_count = sum(1 for p in room["players"].values() if p.get("active", True))
+                    # For collective: count this answer toward the room's performance
+                    # (simplified — we update after each answer, not after all players answer)
+                    update_room_collective(room, 1 if correct else 0, 1, response_time)
 
                     correct_answer = q["options"][q["correct"]]
                     message = get_text(lang, "correct") if correct else get_text(lang, "wrong", answer=correct_answer)
@@ -904,7 +1264,9 @@ async def websocket_endpoint(ws: WebSocket, code: str):
                         "scores": {p["name"]: p["score"] for p in room["players"].values()},
                         "teamScores": room.get("teams") if room["game_mode"] == "team" else None,
                         "selectedIdx": idx,
-                        "pointsEarned": points_earned  # Send points earned to client for display
+                        "pointsEarned": points_earned,
+                        "difficulty": room.get("adaptive_level", "medium"),
+                        "scoreMultiplier": score_multiplier,
                     })
 
                     await asyncio.sleep(3)
@@ -926,72 +1288,135 @@ async def websocket_endpoint(ws: WebSocket, code: str):
             was_host = (user_id == room["host"])
             lang = room.get("language", "en")
             game_state = room.get("state", "waiting")
-            room["players"].pop(user_id)
             
-            if was_host and room["players"]:
-                new_host = next(iter(room["players"].keys()))
-                room["host"] = new_host
-                await broadcast(code, "newHost", {
-                    "hostName": room["players"][new_host]["name"],
-                    "message": get_text(lang, "new_host", host=room["players"][new_host]["name"])
-                })
-            
-            # Broadcast updated player list with avatars
-            MAX_PLAYERS = 4
-            can_start = False
-            if room["game_mode"] == "team":
-                red_count = sum(1 for p in room["players"].values() if p.get("team") == "red")
-                blue_count = sum(1 for p in room["players"].values() if p.get("team") == "blue")
-                can_start = len(room["players"]) == 4 and red_count == 2 and blue_count == 2
-            else:
-                can_start = len(room["players"]) >= 2 and len(room["players"]) <= MAX_PLAYERS
-            
-            await broadcast(code, "playerLeft", {
-                "player": player_name,
-                "remaining": len(room["players"]),
-                "message": get_text(lang, "player_left", player=player_name)
-            })
-            
-            # Broadcast updated players list
-            await broadcast(code, "players", {
-                "players": [
-                    {
-                        "name": p["name"], 
-                        "score": p["score"],
-                        "isHost": uid == room["host"],
-                        "team": p.get("team"),
-                        "avatar": p.get("avatar")
-                    }
-                    for uid, p in room["players"].items()
-                ],
-                "count": len(room["players"]),
-                "maxPlayers": MAX_PLAYERS,
-                "canStart": can_start,
-                "gameMode": room["game_mode"],
-                "teamCounts": {
-                    "red": sum(1 for p in room["players"].values() if p.get("team") == "red"),
-                    "blue": sum(1 for p in room["players"].values() if p.get("team") == "blue")
-                } if room["game_mode"] == "team" else None
-            })
-            
-            # Notify lobby about updated player count
-            if room.get("is_public"):
-                await broadcast_public_rooms()
-            
-            # Only end game if game is in progress (not in lobby/waiting)
+            # If game is in progress, stash player for reconnection instead of removing
             if game_state in ["question", "buzzed", "answered"]:
-                min_players = 4 if room.get("game_mode") == "team" else 2
-                if len(room["players"]) < min_players:
-                    await broadcast(code, "gameOver", {
-                        "reason": get_text(lang, "not_enough_players"),
-                        "winner": None,
-                        "finalScores": {p["name"]: p["score"] for p in room["players"].values()},
-                        "teamScores": room.get("teams") if room.get("game_mode") == "team" else None
+                player_data = room["players"][user_id].copy()
+                if code not in disconnected_players:
+                    disconnected_players[code] = {}
+                disconnected_players[code][user_id] = {
+                    "player_data": player_data,
+                    "disconnected_at": time.time(),
+                    "match_token": player_data["match_token"]
+                }
+                # Mark as disconnected but don't remove yet
+                room["players"][user_id]["connected"] = False
+                
+                await broadcast(code, "playerDisconnected", {
+                    "player": player_name,
+                    "message": f"{player_name} disconnected — waiting for reconnection...",
+                    "timeout": RECONNECT_WINDOW
+                }, exclude=user_id)
+                
+                # Schedule cleanup after RECONNECT_WINDOW
+                asyncio.create_task(_delayed_disconnect_cleanup(code, user_id, player_name, was_host))
+            else:
+                # Not in game — remove immediately (lobby/waiting/gameOver)
+                room["players"].pop(user_id)
+                
+                if was_host and room["players"]:
+                    new_host = next(iter(room["players"].keys()))
+                    room["host"] = new_host
+                    await broadcast(code, "newHost", {
+                        "hostName": room["players"][new_host]["name"],
+                        "message": get_text(lang, "new_host", host=room["players"][new_host]["name"])
                     })
+                
+                MAX_PLAYERS = 4
+                can_start = False
+                if room["game_mode"] == "team":
+                    red_count = sum(1 for p in room["players"].values() if p.get("team") == "red")
+                    blue_count = sum(1 for p in room["players"].values() if p.get("team") == "blue")
+                    can_start = len(room["players"]) == 4 and red_count == 2 and blue_count == 2
+                else:
+                    can_start = len(room["players"]) >= 2 and len(room["players"]) <= MAX_PLAYERS
+                
+                await broadcast(code, "playerLeft", {
+                    "player": player_name,
+                    "remaining": len(room["players"]),
+                    "message": get_text(lang, "player_left", player=player_name)
+                })
+                
+                await broadcast(code, "players", {
+                    "players": [
+                        {
+                            "name": p["name"], 
+                            "score": p["score"],
+                            "isHost": uid == room["host"],
+                            "team": p.get("team"),
+                            "avatar": p.get("avatar")
+                        }
+                        for uid, p in room["players"].items()
+                    ],
+                    "count": len(room["players"]),
+                    "maxPlayers": MAX_PLAYERS,
+                    "canStart": can_start,
+                    "gameMode": room["game_mode"],
+                    "teamCounts": {
+                        "red": sum(1 for p in room["players"].values() if p.get("team") == "red"),
+                        "blue": sum(1 for p in room["players"].values() if p.get("team") == "blue")
+                    } if room["game_mode"] == "team" else None
+                })
+                
+                if room.get("is_public"):
+                    await broadcast_public_rooms()
+                
+                if len(room["players"]) == 0:
                     await cleanup_room(code)
-            elif len(room["players"]) == 0:
-                # Clean up empty rooms
-                await cleanup_room(code)
+
+
+async def _delayed_disconnect_cleanup(code: str, user_id: str, player_name: str, was_host: bool):
+    """After RECONNECT_WINDOW seconds, if the player hasn't reconnected, remove them for real"""
+    await asyncio.sleep(RECONNECT_WINDOW)
+    
+    room = get_room(code)
+    if not room:
+        return
+    
+    # Check if player already reconnected (connected flag restored)
+    player = room["players"].get(user_id)
+    if not player:
+        return  # Already removed
+    if player.get("connected", True):
+        return  # Reconnected successfully
+    
+    # Player didn't reconnect — remove them now
+    lang = room.get("language", "en")
+    game_state = room.get("state", "waiting")
+    room["players"].pop(user_id, None)
+    
+    # Clean up disconnected_players entry
+    if code in disconnected_players:
+        disconnected_players[code].pop(user_id, None)
+    
+    if was_host and room["players"]:
+        new_host = next(iter(room["players"].keys()))
+        room["host"] = new_host
+        await broadcast(code, "newHost", {
+            "hostName": room["players"][new_host]["name"],
+            "message": get_text(lang, "new_host", host=room["players"][new_host]["name"])
+        })
+    
+    await broadcast(code, "playerLeft", {
+        "player": player_name,
+        "remaining": len(room["players"]),
+        "message": get_text(lang, "player_left", player=player_name)
+    })
+    
+    # End game if not enough players remain
+    if game_state in ["question", "buzzed", "answered"]:
+        connected_players = {uid: p for uid, p in room["players"].items() if p.get("connected", True)}
+        min_players = 4 if room.get("game_mode") == "team" else 2
+        if len(connected_players) < min_players:
+            await broadcast(code, "gameOver", {
+                "reason": get_text(lang, "not_enough_players"),
+                "winner": None,
+                "finalScores": {p["name"]: p["score"] for p in room["players"].values()},
+                "teamScores": room.get("teams") if room.get("game_mode") == "team" else None
+            })
+            await cleanup_room(code)
+    elif len(room["players"]) == 0:
+        await cleanup_room(code)
 
 # === GAME LOGIC ===
 
@@ -1004,6 +1429,11 @@ async def start_question(code: str):
     lang = room.get("language", "en")
     subjects = room.get("subjects", [])
     ai_questions = room.get("ai_questions", None)
+    quiz_type = room.get("quiz_type", "classic")
+    
+    # For picguess mode, ensure picguess questions are included
+    if quiz_type == "picguess" and "picguess" not in subjects:
+        subjects = subjects + ["picguess"]
     
     # Debug logging
     print(f"start_question called for room {code}")
@@ -1047,32 +1477,92 @@ async def start_question(code: str):
                 "reason": get_text(lang, "all_questions_completed"),
                 "finalScores": {p["name"]: p["score"] for p in room["players"].values()}
             })
-        await cleanup_room(code)
+        await end_game(code)
         return
 
-    q = room["available"].pop()
+    q = None
+    quiz_type = room.get("quiz_type", "classic")
+    
+    # Adaptive difficulty — select question by difficulty level
+    room_adaptive = get_room_collective_state(room)
+    modifiers = get_adaptive_modifiers(room_adaptive)
+    target_diff = modifiers["target_difficulty"]
+    
+    if len(room["available"]) > 1:
+        # Try to pick a question matching the target difficulty
+        q = select_question_by_difficulty(room["available"], target_diff)
+        if q:
+            room["available"].remove(q)
+        else:
+            q = room["available"].pop()
+    else:
+        q = room["available"].pop()
+    
     room["current_q"] = q
-    room["timer"] = q.get("time", 10)
-    room["max_time"] = room["timer"]  # Store max time for scoring calculation
-    room["question_start_time"] = time.time()  # Store start time for scoring
+    
+    # Adjust timer based on quiz type AND adaptive difficulty
+    base_time = q.get("time", 10)
+    if quiz_type == "speed":
+        base_time = max(5, base_time // 2)
+    elif quiz_type == "picguess":
+        base_time = 15
+    
+    # Apply adaptive timer modifier
+    adaptive_timer = max(5, base_time + modifiers["timer_bonus"])
+    room["timer"] = adaptive_timer
+    room["score_multiplier"] = modifiers["score_multiplier"]
+    room["adaptive_level"] = room_adaptive["level"]
+    
+    room["max_time"] = room["timer"]
+    room["question_start_time"] = time.time()
     room["buzzed"] = None
     room["answered"] = False
     room["state"] = "question"
     room["questions_in_round"] += 1
 
-    # Build question data with optional image
+    # Build question data based on quiz type
     question_data = {
         "q": q["q"],
-        "options": q["options"],
         "time": room["timer"],
         "remaining": len(room["available"]),
         "round": room["current_round"],
         "questionInRound": room["questions_in_round"],
-        "questionsPerRound": room["questions_per_round"]
+        "questionsPerRound": room["questions_per_round"],
+        "quizType": quiz_type,
+        "difficulty": room.get("adaptive_level", "medium"),
+        "scoreMultiplier": room.get("score_multiplier", 1.0),
     }
     
+    if quiz_type == "truefalse":
+        # Convert to True/False: show the question, correct answer is at q["correct"]
+        correct_option = q["options"][q["correct"]]
+        # 50% chance to show the correct answer as the statement, 50% a wrong one
+        if random.random() > 0.5:
+            question_data["q"] = f"{q['q']} → {correct_option}"
+            question_data["options"] = ["Vrai", "Faux"]
+            question_data["tfCorrect"] = 0  # "Vrai" is correct
+        else:
+            wrong_options = [o for i, o in enumerate(q["options"]) if i != q["correct"]]
+            wrong_answer = random.choice(wrong_options) if wrong_options else correct_option
+            question_data["q"] = f"{q['q']} → {wrong_answer}"
+            question_data["options"] = ["Vrai", "Faux"]
+            question_data["tfCorrect"] = 1  # "Faux" is correct
+        # Override correct index for answer checking
+        room["current_q"] = {**q, "options": ["Vrai", "Faux"], "correct": question_data["tfCorrect"]}
+    elif quiz_type == "picguess":
+        # Picture guess: send image with blur level metadata
+        question_data["options"] = q["options"]
+        question_data["picguess"] = True
+        question_data["blurStart"] = 20  # Start blur in px
+        question_data["blurEnd"] = 0  # End blur
+        if "image" in q:
+            question_data["image"] = q["image"]
+    else:
+        # Classic and speed use normal options
+        question_data["options"] = q["options"]
+    
     # Include image if present (for flag quiz etc.)
-    if "image" in q:
+    if "image" in q and "image" not in question_data:
         question_data["image"] = q["image"]
     
     await broadcast(code, "question", question_data)
@@ -1122,7 +1612,6 @@ async def next_question(code: str):
 
 # Minimum questions needed before we stop generating new ones
 MIN_CACHE_SIZE = 90
-QUESTIONS_PER_GAME = 10
 
 async def generate_ai_questions(category: str, num_questions: int = 10, language: str = "fr") -> List[Dict]:
     """Generate trivia questions using Hugging Face API with smart caching"""
