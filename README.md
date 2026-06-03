@@ -1,5 +1,6 @@
 
-<img width="1536" height="800" alt="image" src="https://github.com/user-attachments/assets/cd159175-b3b7-4170-8721-eb2f527b7c08" />
+<img width="1672" height="941" alt="image" src="https://github.com/user-attachments/assets/e43a0aa6-1389-48de-9f00-371cd5bcdcc4" />
+
 
 Github du Projet PISTE :  Questions pour un champion.
 ICI vous trouverez tout les fichiers concernant ce projet.
