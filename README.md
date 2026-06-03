@@ -46,7 +46,7 @@ Explications à titre indicatif  :
 - ⚡game.js : Le fichier JavaScript responsable de l'interaction entre le client et le serveur.
 - game-patches.js : Patchs et corrections.
 
-- 📁CSS
+- 📁CSS : SOUS-FICHIER du fichier static , contient les fichiers CSS
 - base.css & app.css : Code CSS du jeu.
 
 
