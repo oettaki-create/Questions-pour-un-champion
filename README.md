@@ -34,7 +34,8 @@ Explications à titre indicatif  :
 
 
 
-- 🖥️index.html : Interface Utilisateur ,  contient le code CSS.
+- 🖥️index.html : Interface Utilisateur du jeu.
+- Landing.html : Page d'accueil du site , info' générales.
 
 
 
@@ -43,7 +44,10 @@ Explications à titre indicatif  :
 
 
 - ⚡game.js : Le fichier JavaScript responsable de l'interaction entre le client et le serveur.
+- game-patches.js : Patchs et corrections.
 
+- 📁CSS
+- base.css & app.css : Code CSS du jeu.
 
 
 - Les fichiers 📁.venv et 📁__pycache__ sont des fichiers crées automatiquement par Python lors de la création de votre environnement virtuel.
