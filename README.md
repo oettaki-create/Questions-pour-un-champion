@@ -30,8 +30,7 @@ Explications à titre indicatif  :
 
 
 
-- 📁templates : SOUS-FICHIER du fichier GLOBAL Game, contient uniquement le fichier index.html.
-
+Le dossier templates contient les fichiers HTML, notamment index.html, qui représente l’interface principale du jeu.
 
 
 - 🖥️index.html : Interface Utilisateur du jeu.
@@ -39,14 +38,13 @@ Explications à titre indicatif  :
 
 
 
-- 📁static : SOUS-FICHIER du fichier GLOBAL Game , contient uniquement le fichier game.js.
-
+Le dossier static contient les fichiers statiques du frontend, comme le JavaScript et les fichiers CSS.
 
 
 - ⚡game.js : Le fichier JavaScript responsable de l'interaction entre le client et le serveur.
-- game-patches.js : Patchs et corrections.
+game-patches.js ajoute des ajustements sans forcément modifier le fichier principal.
 
-- 📁CSS : SOUS-FICHIER du fichier static , contient les fichiers CSS
+- 📁CSS : Répertoire du fichier static , contient les fichiers CSS
 - base.css & app.css : Code CSS du jeu.
 
 
