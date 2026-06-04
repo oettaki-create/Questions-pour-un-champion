@@ -15,7 +15,7 @@ ICI vous trouverez tout les fichiers concernant ce projet.
 
 Explications à titre indicatif  : 
 
-- 📁Game : LE FICHIER GLOBAL CONTENANT TOUT LES FICHIERS EN DESSOUS.
+
 
 - 🧠 main.py : Partie backend du jeu , logique de fonctionnement.
               Code langage Python + Web FrameWork FASTAPI  + Protocole de Communication WebSocket
@@ -26,7 +26,7 @@ Explications à titre indicatif  :
 
 - 📦requirements.txt : Dépendances et prérequis PYTHON  pour exécuter les fichiers. Toutes les instructions pour savoir comment                         procéder y seront inclus.
 
-- 📘READMENOW.md : Fichier contenant la documentation principale du projet.
+- 📘README.md : Fichier contenant la documentation principale du projet.
 
 
 
